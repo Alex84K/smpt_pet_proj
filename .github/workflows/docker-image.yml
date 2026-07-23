@@ -1,18 +1,54 @@
-name: Docker Image CI
+name: CI/CD Pipeline - MailShield
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
 
 jobs:
-
-  build:
-
+  # ЭТАП 1: Тестирование и проверка кода
+  test-and-lint:
+    name: Run Tests & Build Check
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - name: Чекэут кода из Git
+        uses: actions/checkout@v4
+
+      - name: Установка Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23' # или версия вашего Go
+
+      - name: Кэширование Go модулей
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Проверка форматирования и линтинг
+        run: |
+          go fmt ./...
+          go vet ./...
+
+      - name: Запуск юнит-тестов
+        run: go test -v ./...
+
+  # ЭТАП 2: Проверка сборки Docker-образа
+  docker-build-check:
+    name: Test Docker Build
+    runs-on: ubuntu-latest
+    needs: test-and-lint # Запускается только если тесты прошли успешно
+
+    steps:
+      - name: Чекэут кода
+        uses: actions/checkout@v4
+
+      - name: Проверка сборки Docker образа
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false # На этапе CI просто проверяем, что Dockerfile собирается без ошибок

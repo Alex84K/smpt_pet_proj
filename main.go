@@ -172,7 +172,8 @@ func main() {
 	server := &smtpd.Server{
 		Addr:     listenAddr,
 		Handler:  mailHandler,
-		Appname:  "MailShield_MVP",
+		//Appname:  "MailShield_MVP",
+		Appname:  "MailShield_v2",
 		Hostname: "localhost",
 	}
 

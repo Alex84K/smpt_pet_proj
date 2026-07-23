@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  mailshield:
+    build: .
+    ports:
+      # Проброс внешнего порта 25 на порт 2525 внутри контейнера
+      - "25:2525"
+    restart: always
+    # environment:
+    #   - REDIS_ADDR=redis:6379
+    # depends_on:
+    #   - redis
+
+  # redis:
+  #   image: redis:alpine
+  #   restart: always

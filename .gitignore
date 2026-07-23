@@ -1,0 +1,18 @@
+# Binary
+/mailshield
+*.exe
+*.exe.*
+*.dll
+*.so
+*.dylib
+
+.env
+
+# Test / OS artifacts
+*.test
+*.out
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

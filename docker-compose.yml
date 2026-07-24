@@ -4,14 +4,15 @@ services:
   mailshield:
     build: .
     ports:
-      # Проброс внешнего порта 25 на порт 2525 внутри контейнера
       - "25:2525"
     restart: always
-    # environment:
-    #   - REDIS_ADDR=redis:6379
-    # depends_on:
-    #   - redis
-
-  # redis:
-  #   image: redis:alpine
-  #   restart: always
+    env_file: .env          # TG_TOKEN (secret)
+    environment:
+      - BIND_ADDR=0.0.0.0:2525
+      - HOSTNAME=shk.solutions
+      - DB_PATH=/app/data/mailshield.db
+      - DKIM_KEY_PATH=/app/keys/dkim_private.pem
+      - DKIM_SELECTOR=mail
+    volumes:
+      - ./data:/app/data        # SQLite database (persistent)
+      - ./keys:/app/keys:ro     # DKIM private key (read-only)

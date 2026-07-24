@@ -65,6 +65,17 @@ func (r *UserRegistry) ByID(id core.UserID) (core.User, bool) {
 	return u, ok
 }
 
+func (r *UserRegistry) ByChatID(chatID int64) (core.User, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, u := range r.byID {
+		if u.TGChatID == chatID {
+			return u, true
+		}
+	}
+	return core.User{}, false
+}
+
 func (r *UserRegistry) Authorize(actor core.UserID, fromAddr string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

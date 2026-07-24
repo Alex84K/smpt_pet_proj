@@ -40,6 +40,15 @@ func (r *fakeRegistry) ByID(id core.UserID) (core.User, bool) {
 	return core.User{}, false
 }
 
+func (r *fakeRegistry) ByChatID(chatID int64) (core.User, bool) {
+	for _, u := range r.users {
+		if u.TGChatID == chatID {
+			return u, true
+		}
+	}
+	return core.User{}, false
+}
+
 func (r *fakeRegistry) Authorize(actor core.UserID, fromAddr string) bool {
 	u, ok := r.ByID(actor)
 	return ok && u.Email == fromAddr

@@ -35,6 +35,7 @@ type ConversationStore interface {
 type UserRegistry interface {
 	ByEmail(addr string) (User, bool)
 	ByID(id UserID) (User, bool)
+	ByChatID(chatID int64) (User, bool)
 	// Authorize returns true when actor is allowed to send from fromAddr.
 	Authorize(actor UserID, fromAddr string) bool
 }

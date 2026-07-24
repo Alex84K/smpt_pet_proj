@@ -170,8 +170,8 @@ func main() {
 	}
 
 	server := &smtpd.Server{
-		Addr:     listenAddr,
-		Handler:  mailHandler,
+		Addr:    listenAddr,
+		Handler: mailHandler,
 		//Appname:  "MailShield_MVP",
 		Appname:  "MailShield_v2",
 		Hostname: "localhost",
@@ -232,13 +232,20 @@ func worker(id int, queue <-chan EmailJob) {
 
 		// 3. Вывод результатов анализа
 		fmt.Printf("\n===== РЕЗУЛЬТАТ АНАЛИЗА (Воркер %d) =====\n", id)
-		fmt.Printf("ID задачи:   %s\n", res.JobID)
-		fmt.Printf("Отправитель: %s (IP: %s)\n", res.From, res.SenderIP)
-		fmt.Printf("Получатели:  %s\n", strings.Join(res.To, ", "))
-		fmt.Printf("Тема письма: %s\n", res.Subject)
-		fmt.Printf("Валидность SPF: %t\n", res.SPFValid)
-		fmt.Printf("Найдено вложений: %d\n", res.AttachmentCount)
-		fmt.Printf("Размер текста: %d символов\n", res.TextLength)
+		fmt.Printf("ID задачи:   %s\n", job.ID)
+		fmt.Printf("Отправитель: %s (IP: %s)\n", job.From, job.SenderIP)
+		fmt.Printf("Получатели:  %s\n", strings.Join(job.To, ", "))
+		fmt.Printf("Тема письма: %s\n", envelope.GetHeader("Subject"))
+		fmt.Printf("Валидность SPF: %t\n", spfValid)
+		fmt.Printf("Найдено вложений: %d\n", len(envelope.Attachments))
+
+		// Выводим сам текст письма:
+		if envelope.Text != "" {
+			fmt.Printf("Текст письма (Plain): %s\n", strings.TrimSpace(envelope.Text))
+		} else if envelope.HTML != "" {
+			fmt.Printf("Текст письма (HTML): %s\n", strings.TrimSpace(envelope.HTML))
+		}
+
 		fmt.Printf("=========================================\n\n")
 
 		// 4. Сохранение результатов в In-Memory хранилище

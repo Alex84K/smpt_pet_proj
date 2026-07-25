@@ -212,6 +212,56 @@ own `/adduser` to *receive* mail.
 
 ---
 
+## Observability & hardening (Etap 7)
+
+### Structured logging
+
+All log output is JSON (`log/slog` with `JSONHandler`). Each line is a machine-parseable
+object — easy to `grep` with `jq` or forward to a log aggregator:
+
+```bash
+# on VPS — filter by level
+docker compose logs -f | jq 'select(.level=="ERROR")'
+
+# watch delivery attempts
+docker compose logs -f | jq 'select(.msg=="delivering")'
+```
+
+Typical startup output:
+
+```json
+{"time":"...","level":"INFO","msg":"sqlite ready","path":"/app/data/mailshield.db"}
+{"time":"...","level":"INFO","msg":"telegram authorised","username":"YourBot"}
+{"time":"...","level":"INFO","msg":"smtp listening","addr":"0.0.0.0:2525"}
+{"time":"...","level":"INFO","msg":"MailShield started","bind":"0.0.0.0:2525","domain":"shk.solutions","admin":5238002828}
+```
+
+### Network timeouts
+
+Every blocking network call now has an explicit deadline — a hung MX server or slow
+Telegram API can no longer freeze the process:
+
+| Call | Timeout |
+|------|---------|
+| DNS `LookupTXT` (SPF check) | 10 s |
+| DNS `LookupMX` (outbound delivery) | 10 s |
+| TCP dial to remote MTA | 15 s |
+| Full ingest pipeline per email | 30 s |
+
+### Panic recovery
+
+The Telegram update poller wraps each incoming message in a `defer recover()`. A
+malformed update that causes a panic is logged as `ERROR` and skipped — the poller
+continues processing subsequent messages.
+
+### golangci-lint in CI
+
+`.golangci.yml` enables `errcheck`, `govet`, `staticcheck`, `ineffassign`, `misspell`,
+`gosec`, `bodyclose`, and `noctx`. The lint job runs on every push/PR before the Docker
+image is built.
+
+---
+
 ## Roadmap
 
 | # | Description | Status |
@@ -223,7 +273,7 @@ own `/adduser` to *receive* mail.
 | 4 | Multi-user routing + `team@` alias fan-out | ✅ done |
 | 5 | Telegram Forum Topics (one topic per external contact) | ✅ done |
 | 6 | Admin panel via Telegram (`/adduser`, bind codes, empty-DB bootstrap) | ✅ done |
-| 7 | Hardening — slog JSON, context timeouts, golangci-lint | ⬜ next |
+| 7 | Hardening — slog JSON, context timeouts, panic recovery, golangci-lint CI | ✅ done |
 
 ---
 

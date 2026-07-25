@@ -15,11 +15,19 @@ import (
 type Adapter struct {
 	ingestor core.MailIngestor
 	registry core.UserRegistry
+	aliases  map[string]bool
 	server   *smtpd.Server
 }
 
-func New(addr, hostname string, ingestor core.MailIngestor, registry core.UserRegistry) *Adapter {
-	a := &Adapter{ingestor: ingestor, registry: registry}
+func New(addr, hostname string, ingestor core.MailIngestor, registry core.UserRegistry, aliases []string) *Adapter {
+	a := &Adapter{
+		ingestor: ingestor,
+		registry: registry,
+		aliases:  make(map[string]bool, len(aliases)),
+	}
+	for _, al := range aliases {
+		a.aliases[strings.ToLower(al)] = true
+	}
 	a.server = &smtpd.Server{
 		Addr:        addr,
 		Handler:     a.handleMail,
@@ -38,6 +46,10 @@ func (a *Adapter) ListenAndServe() error {
 
 // handleRcpt runs at RCPT TO time — rejects unknown addresses with 550.
 func (a *Adapter) handleRcpt(_ net.Addr, _ string, to string) bool {
+	to = strings.ToLower(to)
+	if a.aliases[to] {
+		return true
+	}
 	_, ok := a.registry.ByEmail(to)
 	if !ok {
 		log.Printf("[smtp] 550 unknown user: %s", to)

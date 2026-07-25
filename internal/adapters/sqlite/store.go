@@ -100,6 +100,25 @@ func (s *Store) ByChatID(chatID int64) (core.User, bool) {
 	)
 }
 
+func (s *Store) AllActive() []core.User {
+	rows, err := s.db.Query(`SELECT id, email, display_name, tg_chat_id FROM users WHERE active=1`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var users []core.User
+	for rows.Next() {
+		var u core.User
+		var id int64
+		if err := rows.Scan(&id, &u.Email, &u.DisplayName, &u.TGChatID); err != nil {
+			continue
+		}
+		u.ID = core.UserID(id)
+		users = append(users, u)
+	}
+	return users
+}
+
 func (s *Store) Authorize(actor core.UserID, fromAddr string) bool {
 	u, ok := s.ByID(actor)
 	return ok && u.Email == fromAddr

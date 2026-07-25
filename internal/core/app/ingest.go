@@ -14,6 +14,7 @@ type IngestUseCase struct {
 	registry  core.UserRegistry
 	store     core.ConversationStore
 	notifier  core.Notifier
+	aliases   map[string]bool // addresses that expand to all active users (e.g. team@)
 }
 
 func NewIngestUseCase(
@@ -21,8 +22,13 @@ func NewIngestUseCase(
 	r core.UserRegistry,
 	s core.ConversationStore,
 	n core.Notifier,
+	aliases ...string,
 ) *IngestUseCase {
-	return &IngestUseCase{verdicter: v, registry: r, store: s, notifier: n}
+	m := make(map[string]bool, len(aliases))
+	for _, a := range aliases {
+		m[strings.ToLower(a)] = true
+	}
+	return &IngestUseCase{verdicter: v, registry: r, store: s, notifier: n, aliases: m}
 }
 
 func (uc *IngestUseCase) Ingest(ctx context.Context, raw core.RawEmail) error {
@@ -33,16 +39,35 @@ func (uc *IngestUseCase) Ingest(ctx context.Context, raw core.RawEmail) error {
 
 	verdict := uc.verdicter.Analyze(ctx, parsed)
 
-	for _, rcpt := range raw.To {
-		user, ok := uc.registry.ByEmail(rcpt)
-		if !ok {
-			continue // unknown recipient — SMTP layer returns 550, skip here
-		}
+	for _, user := range uc.resolveRecipients(raw.To) {
 		if err := uc.ingestForUser(ctx, user, parsed, verdict); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// resolveRecipients expands alias addresses to all active users and deduplicates.
+func (uc *IngestUseCase) resolveRecipients(addrs []string) []core.User {
+	seen := make(map[core.UserID]bool)
+	var result []core.User
+	for _, addr := range addrs {
+		if uc.aliases[strings.ToLower(addr)] {
+			for _, u := range uc.registry.AllActive() {
+				if !seen[u.ID] {
+					seen[u.ID] = true
+					result = append(result, u)
+				}
+			}
+		} else {
+			u, ok := uc.registry.ByEmail(addr)
+			if ok && !seen[u.ID] {
+				seen[u.ID] = true
+				result = append(result, u)
+			}
+		}
+	}
+	return result
 }
 
 func (uc *IngestUseCase) ingestForUser(

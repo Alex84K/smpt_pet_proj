@@ -49,6 +49,14 @@ func (r *fakeRegistry) ByChatID(chatID int64) (core.User, bool) {
 	return core.User{}, false
 }
 
+func (r *fakeRegistry) AllActive() []core.User {
+	users := make([]core.User, 0, len(r.users))
+	for _, u := range r.users {
+		users = append(users, u)
+	}
+	return users
+}
+
 func (r *fakeRegistry) Authorize(actor core.UserID, fromAddr string) bool {
 	u, ok := r.ByID(actor)
 	return ok && u.Email == fromAddr
@@ -170,6 +178,25 @@ func TestIngest_SameContact_ConversationLinkedOnce(t *testing.T) {
 	}
 	if spy.count != 2 {
 		t.Errorf("want 2 notifications (one per email), got %d", spy.count)
+	}
+}
+
+func TestIngest_AliasTeam_FanOutToAll(t *testing.T) {
+	spy := &notifySpy{}
+	uc := app.NewIngestUseCase(fakeVerdicter{}, newFakeRegistry(boris, fima), newFakeStore(), spy, "team@shk.solutions")
+
+	raw := core.RawEmail{
+		SenderIP: "1.2.3.4",
+		From:     "client@acme.com",
+		To:       []string{"team@shk.solutions"},
+		Data:     []byte("From: client@acme.com\r\nTo: team@shk.solutions\r\nSubject: For everyone\r\nMessage-ID: <team@acme.com>\r\n\r\nHello team!"),
+	}
+
+	if err := uc.Ingest(context.Background(), raw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spy.count != 2 {
+		t.Errorf("team@ alias should fan-out to 2 users, got %d notifications", spy.count)
 	}
 }
 

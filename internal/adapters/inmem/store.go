@@ -76,6 +76,16 @@ func (r *UserRegistry) ByChatID(chatID int64) (core.User, bool) {
 	return core.User{}, false
 }
 
+func (r *UserRegistry) AllActive() []core.User {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	users := make([]core.User, 0, len(r.byID))
+	for _, u := range r.byID {
+		users = append(users, u)
+	}
+	return users
+}
+
 func (r *UserRegistry) Authorize(actor core.UserID, fromAddr string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

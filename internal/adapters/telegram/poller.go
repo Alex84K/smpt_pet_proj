@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -50,10 +51,26 @@ func (p *Poller) Run(ctx context.Context) {
 
 		for _, upd := range updates {
 			offset = upd.UpdateID + 1
-			if upd.Message != nil && upd.Message.ReplyToMessage != nil {
+			if upd.Message == nil {
+				continue
+			}
+			if upd.Message.ReplyToMessage != nil {
 				p.handleReply(ctx, upd.Message)
+			} else {
+				p.handleChatIDQuery(upd.Message)
 			}
 		}
+	}
+}
+
+// handleChatIDQuery replies to any non-reply message with the sender's chat_id.
+// Useful for new users to discover their chat_id so it can be added to the DB.
+func (p *Poller) handleChatIDQuery(msg *tgbotapi.Message) {
+	text := fmt.Sprintf("Your chat_id: <code>%d</code>\n\nForward this to the admin to activate your account.", msg.Chat.ID)
+	reply := tgbotapi.NewMessage(msg.Chat.ID, text)
+	reply.ParseMode = tgbotapi.ModeHTML
+	if _, err := p.c.Bot.Send(reply); err != nil {
+		log.Printf("[telegram/poller] chat_id reply error: %v", err)
 	}
 }
 

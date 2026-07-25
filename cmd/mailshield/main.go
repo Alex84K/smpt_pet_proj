@@ -45,16 +45,19 @@ func main() {
 	}
 	tgNotif := telegram.NewNotifier(tgClient)
 
+	// --- aliases (fan-out to all active users) ---
+	aliases := []string{"team@shk.solutions"}
+
 	// --- driven adapters ---
 	verd       := dnsadapter.New()
 	mailSender := mailer.New(hostname, dkimSelector, dkimKeyPath)
 
 	// --- use-cases ---
-	ingest := app.NewIngestUseCase(verd, db, db, tgNotif)  // db as UserRegistry + ConversationStore
+	ingest := app.NewIngestUseCase(verd, db, db, tgNotif, aliases...)
 	reply  := app.NewReplyUseCase(db, db, fake.NewSigner(), mailSender, hostname)
 
 	// --- driving adapters ---
-	smtpSrv  := smtpadapter.New(bindAddr, hostname, ingest, db)
+	smtpSrv  := smtpadapter.New(bindAddr, hostname, ingest, db, aliases)
 	tgPoller := telegram.NewPoller(tgClient, db, reply)
 
 	// --- run ---
@@ -68,7 +71,7 @@ func main() {
 	}()
 	go tgPoller.Run(ctx)
 
-	log.Println("[MailShield] Etap 3 — SQLite persistence live")
+	log.Println("[MailShield] Etap 4 — multi-user + team@ alias live")
 	log.Printf("[MailShield] bind=%s domain=%s db=%s", bindAddr, hostname, dbPath)
 
 	stop := make(chan os.Signal, 1)

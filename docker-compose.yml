@@ -6,7 +6,7 @@ services:
     ports:
       - "25:2525"
     restart: always
-    env_file: .env          # TG_TOKEN (secret)
+    env_file: .env          # TG_TOKEN (secret) + TG_ADMIN_ID
     environment:
       - BIND_ADDR=0.0.0.0:2525
       - HOSTNAME=shk.solutions

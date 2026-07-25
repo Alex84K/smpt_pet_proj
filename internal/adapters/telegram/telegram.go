@@ -10,6 +10,16 @@ import (
 	"mailshield/internal/core"
 )
 
+// AdminStore provides admin operations called from the TG admin handler.
+type AdminStore interface {
+	AllActive() []core.User
+	CreateUser(email, displayName string) (core.User, error)
+	DeleteUser(email string) error
+	SetChatID(email string, chatID int64) error
+	CreateBindCode(email string) (string, error)
+	ConsumeBindCode(code string) (email string, ok bool)
+}
+
 // TopicIndex maps ConversationID ↔ Telegram forum topic ID within a supergroup.
 // Implemented by sqlite.Store.
 type TopicIndex interface {

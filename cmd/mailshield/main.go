@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"mailshield/internal/adapters/fake"
@@ -13,7 +14,6 @@ import (
 	"mailshield/internal/adapters/outbound/mailer"
 	"mailshield/internal/adapters/sqlite"
 	"mailshield/internal/adapters/telegram"
-	"mailshield/internal/core"
 	"mailshield/internal/core/app"
 )
 
@@ -26,17 +26,12 @@ func main() {
 	dkimKeyPath  := envOr("DKIM_KEY_PATH", "keys/dkim_private.pem")
 	dkimSelector := envOr("DKIM_SELECTOR", "mail")
 
-	// --- SQLite store (ConversationStore + UserRegistry + TG MessageIndex) ---
+	// --- SQLite store (ConversationStore + UserRegistry + TopicIndex + AdminStore) ---
+	// Starts empty; the admin provisions mailboxes at runtime via Telegram commands.
 	db, err := sqlite.New(dbPath)
 	if err != nil {
 		log.Fatalf("[main] sqlite: %v", err)
 	}
-
-	// seed users on first run only (INSERT OR IGNORE — DB is the source of truth after that)
-	seedUsers(db, []core.User{
-		{ID: 1, Email: "boris@shk.solutions", DisplayName: "Boris", TGChatID: 5238002828},
-		{ID: 2, Email: "fima@shk.solutions", DisplayName: "Fima", TGChatID: 0},
-	})
 
 	// --- telegram client ---
 	tgClient, err := telegram.NewClient(tgToken, db) // db implements MessageIndex
@@ -57,8 +52,9 @@ func main() {
 	reply  := app.NewReplyUseCase(db, db, fake.NewSigner(), mailSender, hostname)
 
 	// --- driving adapters ---
+	adminID  := parseChatID(mustEnv("TG_ADMIN_ID"))
 	smtpSrv  := smtpadapter.New(bindAddr, hostname, ingest, db, aliases)
-	tgPoller := telegram.NewPoller(tgClient, db, reply)
+	tgPoller := telegram.NewPoller(tgClient, db, reply, adminID, db)
 
 	// --- run ---
 	ctx, cancel := context.WithCancel(context.Background())
@@ -71,8 +67,8 @@ func main() {
 	}()
 	go tgPoller.Run(ctx)
 
-	log.Println("[MailShield] Etap 5 — forum topics live")
-	log.Printf("[MailShield] bind=%s domain=%s db=%s", bindAddr, hostname, dbPath)
+	log.Println("[MailShield] Etap 6 — admin panel via Telegram live")
+	log.Printf("[MailShield] bind=%s domain=%s db=%s admin=%d", bindAddr, hostname, dbPath, adminID)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -80,14 +76,6 @@ func main() {
 
 	log.Println("[MailShield] shutting down...")
 	cancel()
-}
-
-func seedUsers(db *sqlite.Store, users []core.User) {
-	for _, u := range users {
-		if err := db.AddUser(u); err != nil {
-			log.Printf("[main] seed user %s: %v", u.Email, err)
-		}
-	}
 }
 
 func mustEnv(key string) string {
@@ -103,5 +91,10 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parseChatID(s string) int64 {
+	id, _ := strconv.ParseInt(s, 10, 64)
+	return id
 }
 

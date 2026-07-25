@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"log"
@@ -52,6 +53,11 @@ func (s *Store) migrate() error {
 			created_at      TEXT    NOT NULL,
 			UNIQUE(owner_user_id, external_addr)
 		)`,
+		`CREATE TABLE IF NOT EXISTS bind_codes (
+			code       TEXT    PRIMARY KEY,
+			email      TEXT    NOT NULL,
+			created_at TEXT    NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -65,15 +71,38 @@ func (s *Store) migrate() error {
 
 // ---- UserRegistry ----
 
-// AddUser inserts a user only if they don't exist yet (idempotent seed).
-// To change a user's chat_id after first run, update the DB directly.
-func (s *Store) AddUser(u core.User) error {
-	_, err := s.db.Exec(
-		`INSERT OR IGNORE INTO users (id, email, display_name, tg_chat_id, active)
-		 VALUES (?, ?, ?, ?, 1)`,
-		int64(u.ID), u.Email, u.DisplayName, u.TGChatID,
+// CreateUser inserts a new mailbox with an auto-assigned ID (admin command).
+func (s *Store) CreateUser(email, displayName string) (core.User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return core.User{}, fmt.Errorf("email is empty")
+	}
+	if _, exists := s.ByEmail(email); exists {
+		return core.User{}, fmt.Errorf("mailbox %s already exists", email)
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO users (email, display_name, tg_chat_id, active) VALUES (?, ?, 0, 1)`,
+		email, displayName,
 	)
-	return err
+	if err != nil {
+		return core.User{}, fmt.Errorf("create user %s: %w", email, err)
+	}
+	id, _ := res.LastInsertId()
+	return core.User{ID: core.UserID(id), Email: email, DisplayName: displayName}, nil
+}
+
+// DeleteUser removes a mailbox. Fails if the user still has conversations
+// (foreign key), which protects historical threads from silent deletion.
+func (s *Store) DeleteUser(email string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	res, err := s.db.Exec(`DELETE FROM users WHERE email=?`, email)
+	if err != nil {
+		return fmt.Errorf("delete %s: %w", email, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("mailbox not found: %s", email)
+	}
+	return nil
 }
 
 func (s *Store) ByEmail(addr string) (core.User, bool) {
@@ -116,9 +145,65 @@ func (s *Store) AllActive() []core.User {
 	return users
 }
 
+func (s *Store) SetChatID(email string, chatID int64) error {
+	res, err := s.db.Exec(`UPDATE users SET tg_chat_id=? WHERE email=?`, chatID, email)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("user not found: %s", email)
+	}
+	return nil
+}
+
 func (s *Store) Authorize(actor core.UserID, fromAddr string) bool {
 	u, ok := s.ByID(actor)
 	return ok && u.Email == fromAddr
+}
+
+// ---- bind codes (short-lived tokens linking a mailbox to a supergroup) ----
+
+const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no ambiguous I/O/0/1
+
+// CreateBindCode issues a random 6-char code for the given mailbox.
+func (s *Store) CreateBindCode(email string) (string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if _, ok := s.ByEmail(email); !ok {
+		return "", fmt.Errorf("mailbox not found: %s", email)
+	}
+	code, err := randomCode(6)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO bind_codes (code, email, created_at) VALUES (?, ?, ?)`,
+		code, email, time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// ConsumeBindCode looks up a code, returns its mailbox, and deletes it (one-shot).
+func (s *Store) ConsumeBindCode(code string) (string, bool) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	var email string
+	if err := s.db.QueryRow(`SELECT email FROM bind_codes WHERE code=?`, code).Scan(&email); err != nil {
+		return "", false
+	}
+	s.db.Exec(`DELETE FROM bind_codes WHERE code=?`, code)
+	return email, true
+}
+
+func randomCode(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = codeAlphabet[int(b[i])%len(codeAlphabet)]
+	}
+	return string(b), nil
 }
 
 func (s *Store) queryUser(query string, arg any) (core.User, bool) {

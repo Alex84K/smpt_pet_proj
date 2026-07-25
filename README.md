@@ -42,7 +42,7 @@ internal/
     inbound/smtp/       — SMTP server (mhale/smtpd)
     outbound/dns/       — SPF verdicter via net.LookupTXT
     outbound/mailer/    — direct MTA delivery + DKIM (emersion/go-msgauth)
-    sqlite/             — ConversationStore + UserRegistry + TopicIndex
+    sqlite/             — ConversationStore + UserRegistry + TopicIndex + AdminStore
     telegram/           — forum-topic notifier + update poller
     fake/, inmem/       — test doubles
 keys/                   — DKIM PEM files (gitignored)
@@ -73,13 +73,14 @@ keys/                   — DKIM PEM files (gitignored)
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `TG_TOKEN` | ✓ | — | Telegram Bot token |
+| `TG_ADMIN_ID` | ✓ | — | Telegram `user_id` of the admin who provisions mailboxes |
 | `BIND_ADDR` | | `0.0.0.0:2525` | SMTP listen address inside container |
 | `HOSTNAME` | | `shk.solutions` | SMTP hostname / MAIL FROM domain |
 | `DB_PATH` | | `mailshield.db` | SQLite database path |
 | `DKIM_KEY_PATH` | | `keys/dkim_private.pem` | DKIM RSA private key (PEM) |
 | `DKIM_SELECTOR` | | `mail` | DKIM selector |
 
-Only `TG_TOKEN` is secret and belongs in `.env`. Everything else is in `docker-compose.yml`.
+`TG_TOKEN` and `TG_ADMIN_ID` live in `.env`; everything else is in `docker-compose.yml`. To find your `TG_ADMIN_ID`, message the bot — it replies with your `chat_id`.
 
 ---
 
@@ -89,8 +90,8 @@ Only `TG_TOKEN` is secret and belongs in `.env`. Everything else is in `docker-c
 # 1. Install dependencies
 go mod download
 
-# 2. Create .env with your bot token
-echo "TG_TOKEN=<your_token>" > .env
+# 2. Create .env with your bot token and admin user_id
+printf 'TG_TOKEN=<your_token>\nTG_ADMIN_ID=<your_user_id>\n' > .env
 
 # 3. Run
 export $(cat .env | xargs)
@@ -113,7 +114,7 @@ go test ./...
 /srv/mailshield/
 ├── docker-compose.yml
 ├── Dockerfile
-├── .env                  ← TG_TOKEN only — create manually
+├── .env                  ← TG_TOKEN + TG_ADMIN_ID — create manually
 ├── keys/
 │   └── dkim_private.pem  ← already on VPS from deliverability setup
 └── data/                 ← created by Docker; holds mailshield.db
@@ -129,52 +130,85 @@ rsync -av --exclude='.env' --exclude='data/' \
 # On VPS
 ssh root@82.165.47.33
 cd /srv/mailshield
-echo "TG_TOKEN=<token>" > .env   # only if not already there
+printf 'TG_TOKEN=<token>\nTG_ADMIN_ID=<user_id>\n' > .env   # only if not already there
 docker compose up -d --build
 docker compose logs -f
 ```
 
+**Starting with an empty database** (one-time reset — the seed users are gone; all
+mailboxes are now created at runtime via Telegram):
+
+```bash
+cd /srv/mailshield
+docker compose down
+rm -f ./data/mailshield.db*          # .db, .db-wal, .db-shm
+docker compose up -d --build
+```
+
 ---
 
-## Telegram supergroup setup (Forum Topics)
+## Admin panel (Telegram)
 
-Each user needs their own **supergroup with Topics enabled**. The bot creates one topic per external contact automatically.
+All mailbox management happens through the bot in a **direct chat with the admin**
+(the account whose `user_id` matches `TG_ADMIN_ID`). No shell, no SQL.
 
-**Setup steps:**
+| Command | Action |
+|---------|--------|
+| `/adduser email [name]` | Create a mailbox → bot returns a **bind code** |
+| `/bind CODE` | *(run inside the target supergroup)* link that mailbox to this group |
+| `/users` | List mailboxes and their bind status |
+| `/setchat email chat_id` | Manually set a mailbox's chat_id (fallback) |
+| `/deluser email` | Remove a mailbox |
+| `/help` | Show the command list |
 
-1. Create a Telegram supergroup
-2. Enable topics: **Group Settings → Topics ✓**
-3. Add `@your_bot` as admin → grant **Delete messages** and **Manage topics**
-4. Get the group's `chat_id` — forward any group message to `@userinfobot`
-5. Update the DB on VPS:
+Bind codes are single-use, generated with `crypto/rand`, and stored in the
+`bind_codes` table until consumed.
 
-```bash
-sqlite3 ./data/mailshield.db \
-  "UPDATE users SET tg_chat_id=-1001234567890 WHERE email='boris@shk.solutions';"
+---
+
+## Onboarding a user (Forum Topics)
+
+Each user gets their own **supergroup with Topics enabled**. The bot creates one
+topic per external contact automatically. A user's stored chat_id **must** be the
+supergroup id (negative, `-100…`) — that's why binding happens inside the group.
+
+**Steps:**
+
+1. Create a Telegram supergroup and enable **Group Settings → Topics ✓**
+2. Add `@your_bot` as admin → grant **Delete messages** and **Manage topics**
+3. Admin (in DM with the bot): `/adduser fima@shk.solutions Fima` → bot replies with a code
+4. Anyone in the supergroup: `/bind <code>` → the bot captures the group id and links it
+
+```
+Admin (DM with bot):
+  /adduser fima@shk.solutions Fima
+  → ✅ Mailbox created. Bind code: A1B2C3
+     Send /bind A1B2C3 in Fima's supergroup.
+
+In Fima's supergroup:
+  /bind A1B2C3
+  → ✅ fima@shk.solutions linked to this group
 ```
 
-No restart needed — the poller reads the DB per-request.
-
-**Adding a new user:**
-
-```bash
-# 1. User messages the bot → bot replies with their chat_id
-# 2. Update DB:
-sqlite3 ./data/mailshield.db \
-  "UPDATE users SET tg_chat_id=<CHAT_ID> WHERE email='fima@shk.solutions';"
-```
+No restart needed — the poller reads the DB per-request. The `/bind` step also works
+as a manual fallback via `/setchat email <chat_id>` if you already know the group id
+(the number after `#` in the `web.telegram.org` URL).
 
 ---
 
 ## Users and aliases
 
-Users are seeded from `cmd/mailshield/main.go` on first run (`INSERT OR IGNORE`). After that, the **database is the source of truth** — restart does not overwrite existing records.
+The database **starts empty**. Mailboxes are created at runtime by the admin via
+`/adduser`; after that, the database is the sole source of truth. The admin's
+authority comes from `TG_ADMIN_ID` (env), independent of the `users` table — so the
+admin can bootstrap everything on a fresh database. Note the admin still needs their
+own `/adduser` to *receive* mail.
 
 | Address | Type | Description |
 |---------|------|-------------|
-| `boris@shk.solutions` | user | ID 1, seeded with chat_id |
-| `fima@shk.solutions` | user | ID 2, chat_id set via DB |
-| `team@shk.solutions` | alias | fan-out → all active users |
+| `boris@shk.solutions` | user | created via `/adduser`, bound to a supergroup |
+| `fima@shk.solutions` | user | created via `/adduser`, bound to a supergroup |
+| `team@shk.solutions` | alias | fan-out → all active users (configured in `main.go`) |
 
 ---
 
@@ -188,7 +222,8 @@ Users are seeded from `cmd/mailshield/main.go` on first run (`INSERT OR IGNORE`)
 | 3 | SQLite persistence | ✅ done |
 | 4 | Multi-user routing + `team@` alias fan-out | ✅ done |
 | 5 | Telegram Forum Topics (one topic per external contact) | ✅ done |
-| 6 | Hardening — slog JSON, context timeouts, golangci-lint | ⬜ next |
+| 6 | Admin panel via Telegram (`/adduser`, bind codes, empty-DB bootstrap) | ✅ done |
+| 7 | Hardening — slog JSON, context timeouts, golangci-lint | ⬜ next |
 
 ---
 

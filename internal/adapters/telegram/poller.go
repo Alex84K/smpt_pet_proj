@@ -2,16 +2,35 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"mailshield/internal/core"
 )
 
-// Poller is a driving adapter: long-polls Telegram getUpdates and calls
-// ReplyService when a user replies to a bot notification message.
+// tgUpdate is a minimal raw Telegram update struct.
+// We parse it manually because tgbotapi v5.5.1 predates forum topics
+// and its Message struct lacks MessageThreadID.
+type tgUpdate struct {
+	UpdateID int        `json:"update_id"`
+	Message  *tgMessage `json:"message"`
+}
+
+type tgMessage struct {
+	MessageID       int    `json:"message_id"`
+	MessageThreadID int    `json:"message_thread_id"`
+	Text            string `json:"text"`
+	Chat            struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+}
+
+// Poller is a driving adapter: long-polls Telegram getUpdates and dispatches
+// topic messages to ReplyService, and non-topic messages to a chat_id helper.
 type Poller struct {
 	c        *Client
 	registry core.UserRegistry
@@ -23,7 +42,7 @@ func NewPoller(c *Client, registry core.UserRegistry, reply core.ReplyService) *
 }
 
 func (p *Poller) Run(ctx context.Context) {
-	log.Println("[telegram/poller] started")
+	log.Println("[telegram/poller] started (forum topics mode)")
 	offset := 0
 
 	for {
@@ -34,10 +53,7 @@ func (p *Poller) Run(ctx context.Context) {
 		default:
 		}
 
-		updates, err := p.c.Bot.GetUpdates(tgbotapi.UpdateConfig{
-			Offset:  offset,
-			Timeout: 30,
-		})
+		updates, err := p.getUpdates(offset, 30)
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -54,8 +70,8 @@ func (p *Poller) Run(ctx context.Context) {
 			if upd.Message == nil {
 				continue
 			}
-			if upd.Message.ReplyToMessage != nil {
-				p.handleReply(ctx, upd.Message)
+			if upd.Message.MessageThreadID != 0 {
+				p.handleTopicMessage(ctx, upd.Message)
 			} else {
 				p.handleChatIDQuery(upd.Message)
 			}
@@ -63,25 +79,30 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-// handleChatIDQuery replies to any non-reply message with the sender's chat_id.
-// Useful for new users to discover their chat_id so it can be added to the DB.
-func (p *Poller) handleChatIDQuery(msg *tgbotapi.Message) {
-	text := fmt.Sprintf("Your chat_id: <code>%d</code>\n\nForward this to the admin to activate your account.", msg.Chat.ID)
-	reply := tgbotapi.NewMessage(msg.Chat.ID, text)
-	reply.ParseMode = tgbotapi.ModeHTML
-	if _, err := p.c.Bot.Send(reply); err != nil {
-		log.Printf("[telegram/poller] chat_id reply error: %v", err)
+func (p *Poller) getUpdates(offset, timeout int) ([]tgUpdate, error) {
+	params := tgbotapi.Params{"timeout": strconv.Itoa(timeout)}
+	if offset > 0 {
+		params["offset"] = strconv.Itoa(offset)
 	}
+	resp, err := p.c.Bot.MakeRequest("getUpdates", params)
+	if err != nil {
+		return nil, err
+	}
+	var updates []tgUpdate
+	if err := json.Unmarshal(resp.Result, &updates); err != nil {
+		return nil, fmt.Errorf("parse updates: %w", err)
+	}
+	return updates, nil
 }
 
-func (p *Poller) handleReply(ctx context.Context, msg *tgbotapi.Message) {
+// handleTopicMessage routes a message from a forum topic to the correct conversation.
+func (p *Poller) handleTopicMessage(ctx context.Context, msg *tgMessage) {
 	chatID := msg.Chat.ID
-	repliedToID := msg.ReplyToMessage.MessageID
+	threadID := msg.MessageThreadID
 
-	convID, ok := p.c.idx.ResolveTGMessage(chatID, repliedToID)
+	convID, ok := p.c.topicIdx.ResolveByTopic(chatID, threadID)
 	if !ok {
-		// reply to something other than a bot notification — ignore
-		return
+		return // message in a topic we don't manage — ignore
 	}
 
 	user, ok := p.registry.ByChatID(chatID)
@@ -98,5 +119,22 @@ func (p *Poller) handleReply(ctx context.Context, msg *tgbotapi.Message) {
 		Body:         msg.Text,
 	}); err != nil {
 		log.Printf("[telegram/poller] submit reply error: %v", err)
+	}
+}
+
+// handleChatIDQuery responds to any non-topic message with the sender's chat_id.
+// Useful for new users discovering their chat_id to share with the admin.
+func (p *Poller) handleChatIDQuery(msg *tgMessage) {
+	text := fmt.Sprintf(
+		"Your chat_id: <code>%d</code>\n\nForward this to the admin to activate your account.",
+		msg.Chat.ID,
+	)
+	params := tgbotapi.Params{
+		"chat_id":    strconv.FormatInt(msg.Chat.ID, 10),
+		"text":       text,
+		"parse_mode": "HTML",
+	}
+	if _, err := p.c.Bot.MakeRequest("sendMessage", params); err != nil {
+		log.Printf("[telegram/poller] chat_id reply error: %v", err)
 	}
 }

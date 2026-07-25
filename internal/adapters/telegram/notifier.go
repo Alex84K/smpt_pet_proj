@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -13,8 +14,8 @@ import (
 
 const maxBodyLen = 2000
 
-// Notifier implements core.Notifier — sends a formatted HTML message and
-// records the bot message ID in the shared index for reply detection.
+// Notifier implements core.Notifier — sends formatted HTML to a forum topic,
+// creating the topic on the first message from a new contact.
 type Notifier struct{ c *Client }
 
 func NewNotifier(c *Client) *Notifier { return &Notifier{c} }
@@ -25,23 +26,43 @@ func (n *Notifier) Notify(_ context.Context, notif core.Notification) error {
 		return nil
 	}
 
-	msg := tgbotapi.NewMessage(notif.User.TGChatID, formatNotification(notif))
-	msg.ParseMode = tgbotapi.ModeHTML
+	chatID := notif.User.TGChatID
 
-	sent, err := n.c.Bot.Send(msg)
-	if err != nil {
-		return fmt.Errorf("telegram send to %d: %w", notif.User.TGChatID, err)
+	topicID, ok := n.c.topicIdx.GetTopicID(notif.ConvID)
+	if !ok {
+		// First email from this contact — create a dedicated forum topic.
+		id, err := n.c.createTopic(chatID, topicName(notif))
+		if err != nil {
+			log.Printf("[telegram/notifier] create topic for %s: %v — sending to general chat", notif.ConvID, err)
+		} else {
+			_ = n.c.topicIdx.SetTopicID(notif.ConvID, id)
+			topicID = id
+		}
 	}
 
-	// record mapping so Poller can resolve a reply to this message
-	if err := n.c.idx.LinkTGMessage(notif.User.TGChatID, sent.MessageID, notif.ConvID); err != nil {
-		log.Printf("[telegram/notifier] index link error: %v", err) // non-fatal: message was sent
+	params := tgbotapi.Params{
+		"chat_id":    strconv.FormatInt(chatID, 10),
+		"text":       formatNotification(notif),
+		"parse_mode": "HTML",
+	}
+	if topicID > 0 {
+		params["message_thread_id"] = strconv.Itoa(topicID)
 	}
 
-	log.Printf("[telegram/notifier] sent to %s (chat=%d msg=%d) subject=%q verdict=%s",
-		notif.User.Email, notif.User.TGChatID, sent.MessageID,
-		notif.Email.Subject, notif.Verdict.Label)
+	if _, err := n.c.Bot.MakeRequest("sendMessage", params); err != nil {
+		return fmt.Errorf("telegram sendMessage to %d topic=%d: %w", chatID, topicID, err)
+	}
+
+	log.Printf("[telegram/notifier] sent to %s (chat=%d topic=%d) subject=%q verdict=%s",
+		notif.User.Email, chatID, topicID, notif.Email.Subject, notif.Verdict.Label)
 	return nil
+}
+
+func topicName(notif core.Notification) string {
+	if notif.Email.From != "" {
+		return notif.Email.From
+	}
+	return string(notif.ConvID)
 }
 
 func formatNotification(n core.Notification) string {

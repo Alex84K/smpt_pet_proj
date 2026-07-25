@@ -48,14 +48,9 @@ func (s *Store) migrate() error {
 			subject         TEXT    NOT NULL DEFAULT '',
 			root_message_id TEXT    NOT NULL DEFAULT '',
 			refs            TEXT    NOT NULL DEFAULT '',
+			tg_topic_id     INTEGER NOT NULL DEFAULT 0,
 			created_at      TEXT    NOT NULL,
 			UNIQUE(owner_user_id, external_addr)
-		)`,
-		`CREATE TABLE IF NOT EXISTS tg_messages (
-			chat_id  INTEGER NOT NULL,
-			msg_id   INTEGER NOT NULL,
-			conv_id  TEXT    NOT NULL REFERENCES conversations(id),
-			PRIMARY KEY (chat_id, msg_id)
 		)`,
 	}
 	for _, stmt := range stmts {
@@ -63,6 +58,8 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("exec %q: %w", stmt[:min(40, len(stmt))], err)
 		}
 	}
+	// idempotent column additions for existing DBs
+	s.db.Exec(`ALTER TABLE conversations ADD COLUMN tg_topic_id INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -140,8 +137,8 @@ func (s *Store) queryUser(query string, arg any) (core.User, bool) {
 func (s *Store) Link(id core.ConversationID, t core.EmailThread) error {
 	_, err := s.db.Exec(
 		`INSERT OR IGNORE INTO conversations
-			(id, owner_user_id, external_addr, subject, root_message_id, refs, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, owner_user_id, external_addr, subject, root_message_id, refs, tg_topic_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
 		string(id), int64(t.OwnerID), t.ExtAddr, t.Subject,
 		t.MessageID, strings.Join(t.References, " "),
 		time.Now().UTC().Format(time.RFC3339),
@@ -168,21 +165,33 @@ func (s *Store) Resolve(id core.ConversationID) (core.EmailThread, bool) {
 	return t, true
 }
 
-// ---- telegram.MessageIndex ----
+// ---- telegram.TopicIndex ----
 
-func (s *Store) LinkTGMessage(chatID int64, msgID int, convID core.ConversationID) error {
+func (s *Store) GetTopicID(convID core.ConversationID) (int, bool) {
+	var id int
+	err := s.db.QueryRow(
+		`SELECT tg_topic_id FROM conversations WHERE id=?`, string(convID),
+	).Scan(&id)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+func (s *Store) SetTopicID(convID core.ConversationID, topicID int) error {
 	_, err := s.db.Exec(
-		`INSERT OR IGNORE INTO tg_messages (chat_id, msg_id, conv_id) VALUES (?, ?, ?)`,
-		chatID, msgID, string(convID),
+		`UPDATE conversations SET tg_topic_id=? WHERE id=?`, topicID, string(convID),
 	)
 	return err
 }
 
-func (s *Store) ResolveTGMessage(chatID int64, msgID int) (core.ConversationID, bool) {
+func (s *Store) ResolveByTopic(chatID int64, topicID int) (core.ConversationID, bool) {
 	var convID string
-	err := s.db.QueryRow(
-		`SELECT conv_id FROM tg_messages WHERE chat_id=? AND msg_id=?`,
-		chatID, msgID,
+	err := s.db.QueryRow(`
+		SELECT c.id FROM conversations c
+		JOIN users u ON c.owner_user_id = u.id
+		WHERE c.tg_topic_id = ? AND u.tg_chat_id = ?`,
+		topicID, chatID,
 	).Scan(&convID)
 	if err != nil {
 		return "", false

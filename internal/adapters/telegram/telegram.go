@@ -1,64 +1,60 @@
 package telegram
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
+	"strconv"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"mailshield/internal/core"
 )
 
-// MessageIndex maps (chatID, botMsgID) → ConversationID for reply detection.
-// Implemented by sqlite.Store (persistent) or inmemIndex (dev/test).
-type MessageIndex interface {
-	LinkTGMessage(chatID int64, msgID int, convID core.ConversationID) error
-	ResolveTGMessage(chatID int64, msgID int) (core.ConversationID, bool)
+// TopicIndex maps ConversationID ↔ Telegram forum topic ID within a supergroup.
+// Implemented by sqlite.Store.
+type TopicIndex interface {
+	// GetTopicID returns the forum topic ID if one has been created for this conversation.
+	GetTopicID(convID core.ConversationID) (topicID int, ok bool)
+	// SetTopicID records the forum topic ID after creation (called once per conversation).
+	SetTopicID(convID core.ConversationID, topicID int) error
+	// ResolveByTopic finds the ConversationID for a given (supergroup chatID, topicID) pair.
+	ResolveByTopic(chatID int64, topicID int) (core.ConversationID, bool)
 }
 
 // Client is shared between Notifier and Poller.
 type Client struct {
-	Bot *tgbotapi.BotAPI
-	idx MessageIndex
+	Bot      *tgbotapi.BotAPI
+	topicIdx TopicIndex
 }
 
-func NewClient(token string, idx MessageIndex) (*Client, error) {
+func NewClient(token string, topicIdx TopicIndex) (*Client, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("telegram bot init: %w", err)
 	}
 	log.Printf("[telegram] authorised as @%s", bot.Self.UserName)
-	return &Client{Bot: bot, idx: idx}, nil
+	return &Client{Bot: bot, topicIdx: topicIdx}, nil
 }
 
-// NewInMemIndex returns a non-persistent in-memory MessageIndex (useful in tests).
-func NewInMemIndex() MessageIndex { return newInmemIndex() }
-
-// inmemIndex is the in-memory fallback implementation.
-type inmemIndex struct {
-	mu   sync.RWMutex
-	data map[msgKey]core.ConversationID
-}
-
-type msgKey struct {
-	chatID int64
-	msgID  int
-}
-
-func newInmemIndex() *inmemIndex {
-	return &inmemIndex{data: make(map[msgKey]core.ConversationID)}
-}
-
-func (i *inmemIndex) LinkTGMessage(chatID int64, msgID int, convID core.ConversationID) error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.data[msgKey{chatID, msgID}] = convID
-	return nil
-}
-
-func (i *inmemIndex) ResolveTGMessage(chatID int64, msgID int) (core.ConversationID, bool) {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	c, ok := i.data[msgKey{chatID, msgID}]
-	return c, ok
+// createTopic creates a forum topic in the given supergroup.
+// The bot must be an admin with "Manage Topics" permission.
+func (c *Client) createTopic(chatID int64, name string) (int, error) {
+	if len(name) > 128 {
+		name = name[:128]
+	}
+	params := tgbotapi.Params{
+		"chat_id": strconv.FormatInt(chatID, 10),
+		"name":    name,
+	}
+	resp, err := c.Bot.MakeRequest("createForumTopic", params)
+	if err != nil {
+		return 0, fmt.Errorf("createForumTopic: %w", err)
+	}
+	var topic struct {
+		MessageThreadID int `json:"message_thread_id"`
+	}
+	if err := json.Unmarshal(resp.Result, &topic); err != nil {
+		return 0, fmt.Errorf("parse createForumTopic response: %w", err)
+	}
+	return topic.MessageThreadID, nil
 }

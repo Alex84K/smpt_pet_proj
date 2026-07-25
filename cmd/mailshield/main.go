@@ -71,7 +71,7 @@ func main() {
 	}()
 	go tgPoller.Run(ctx)
 
-	log.Println("[MailShield] Etap 4 — multi-user + team@ alias live")
+	log.Println("[MailShield] Etap 5 — forum topics live")
 	log.Printf("[MailShield] bind=%s domain=%s db=%s", bindAddr, hostname, dbPath)
 
 	stop := make(chan os.Signal, 1)

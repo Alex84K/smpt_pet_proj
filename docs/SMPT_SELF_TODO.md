@@ -1,98 +1,98 @@
-# 🚀 Go-MailShield: Дорожная карта разработки (Roadmap & TODO)
+# 🚀 Go-MailShield: Roadmap der Entwicklung (Roadmap & TODO)
 
-Этот файл содержит текущий статус и пошаговый план развития pet-проекта почтового шлюза безопасности (Email Security Gateway) на языке Go.
-
----
-
-## 🟢 ЭТАП 0: Инфраструктура и Базовый MVP (ВЫПОЛНЕНО)
-
-- [x] **SMTP Receiver:** Реализован базовый прием писем по протоколу SMTP на Go (`smtpd`).
-- [x] **MIME Parser:** Интегрирован разбор заголовков, текста и HTML писем (`enmime`).
-- [x] **Worker Pool:** Реализована конкурентная обработка писем через каналы (`chan EmailJob`) и пул горутин.
-- [x] **Базовый SPF:** Реализован поиск DNS TXT-записей для первичной проверки отправителя.
-- [x] **Docker & Compose:** Приложение упаковано в Docker-образ с мультиэтапной сборкой (multi-stage build).
-- [x] **CI/CD Pipeline:** Настроен GitHub Actions workflow (прогон тестов, сборка образа, публикация в GHCR).
-- [x] **GitOps Auto-Deploy:** Настроен Watchtower на VPS для автоматического обновлений контейнера по Pull-модели.
-- [x] **Интеграционные тесты:** Написан тестовый скрипт на Bun / TypeScript для сквозной проверки отправки писем.
+Diese Datei enthält den aktuellen Status und den schrittweisen Entwicklungsplan des Pet-Projekts eines Email-Security-Gateways (Email Security Gateway) in Go.
 
 ---
 
-## 🟡 ЭТАП 1: Углубление в Email Security (В РАБОТЕ)
+## 🟢 ETAPPE 0: Infrastruktur und Basis-MVP (ABGESCHLOSSEN)
 
-Развитие доменной логики защиты электронной почты (ключевые навыки для Hornetsecurity):
+- [x] **SMTP Receiver:** Grundlegender E-Mail-Empfang über das SMTP-Protokoll in Go implementiert (`smtpd`).
+- [x] **MIME Parser:** Parsing von Headern, Text und HTML von E-Mails integriert (`enmime`).
+- [x] **Worker Pool:** Nebenläufige Verarbeitung von E-Mails über Channels (`chan EmailJob`) und einen Goroutine-Pool implementiert.
+- [x] **Basis-SPF:** Suche nach DNS-TXT-Einträgen zur initialen Absenderprüfung implementiert.
+- [x] **Docker & Compose:** Anwendung als Docker-Image mit mehrstufigem Build (multi-stage build) verpackt.
+- [x] **CI/CD Pipeline:** GitHub-Actions-Workflow eingerichtet (Testlauf, Image-Build, Veröffentlichung in GHCR).
+- [x] **GitOps Auto-Deploy:** Watchtower auf dem VPS für automatische Container-Updates nach dem Pull-Modell eingerichtet.
+- [x] **Integrationstests:** Testskript in Bun / TypeScript für die End-to-End-Prüfung des E-Mail-Versands geschrieben.
 
-### 1.1. Криптография и проверки подлинности
+---
+
+## 🟡 ETAPPE 1: Vertiefung in Email Security (IN ARBEIT)
+
+Weiterentwicklung der Fachlogik für E-Mail-Sicherheit (Schlüsselkompetenzen für Hornetsecurity):
+
+### 1.1. Kryptografie und Authentizitätsprüfungen
 - [ ] **DKIM (DomainKeys Identified Mail):**
-  - [ ] Извлечение заголовка `DKIM-Signature`.
-  - [ ] Поиск открытого ключа в DNS (`selector._domainkey.domain.com`).
-  - [ ] Проверка цифровой подписи письма с использованием `github.com/toorop/go-dkim`.
+  - [ ] Extraktion des `DKIM-Signature`-Headers.
+  - [ ] Suche nach dem öffentlichen Schlüssel im DNS (`selector._domainkey.domain.com`).
+  - [ ] Prüfung der digitalen Signatur der E-Mail mittels `github.com/toorop/go-dkim`.
 - [ ] **DMARC (Domain-based Message Authentication):**
-  - [ ] Поиск DMARC-политики домена (`_dmarc.domain.com`).
-  - [ ] Сопоставление результатов SPF + DKIM с DMARC-политикой (`none`, `quarantine`, `reject`).
+  - [ ] Suche nach der DMARC-Policy der Domain (`_dmarc.domain.com`).
+  - [ ] Abgleich der SPF- und DKIM-Ergebnisse mit der DMARC-Policy (`none`, `quarantine`, `reject`).
 
-### 1.2. Анализ угроз (Threat Intelligence)
+### 1.2. Bedrohungsanalyse (Threat Intelligence)
 - [ ] **Phishing & URL Extractor:**
-  - [ ] Извлечение всех `href` ссылок из HTML и текста письма.
-  - [ ] Эвристика: Детекция несоответствия анкора и реальной ссылки (например, текст `paypal.com`, а ссылка `paypa1-security.com`).
-  - [ ] Детекция прямого использования IP-адресов в ссылках (`http://192.168.1.1/login`).
+  - [ ] Extraktion aller `href`-Links aus HTML und Text der E-Mail.
+  - [ ] Heuristik: Erkennung von Abweichungen zwischen Anker-Text und tatsächlichem Link (z. B. Text `paypal.com`, aber Link `paypa1-security.com`).
+  - [ ] Erkennung direkter IP-Adressen in Links (`http://192.168.1.1/login`).
 - [ ] **Attachment Analyzer:**
-  - [ ] Вычисление хэш-сумм SHA-256 для всех вложений.
-  - [ ] Детекция опасных двойных расширений (например, `document.pdf.exe`).
-  - [ ] Блокировка опасных MIME-типов и расширений (`.exe`, `.scr`, `.bat`, `.vbs`, `.js`, `.iso`).
+  - [ ] Berechnung von SHA-256-Hashes für alle Anhänge.
+  - [ ] Erkennung gefährlicher doppelter Dateiendungen (z. B. `document.pdf.exe`).
+  - [ ] Blockieren gefährlicher MIME-Typen und Dateiendungen (`.exe`, `.scr`, `.bat`, `.vbs`, `.js`, `.iso`).
 
 ---
 
-## 🔵 ЭТАП 2: Промышленная архитектура и Хранение
+## 🔵 ETAPPE 2: Produktionsreife Architektur und Speicherung
 
-Переход от In-Memory хранения к распределенной продуктовой архитектуре:
+Übergang von In-Memory-Speicherung zu einer verteilten Produktionsarchitektur:
 
-- [ ] **Интеграция с Redis (`github.com/redis/go-redis/v9`):**
-  - [ ] Реализация `RedisStore` взамен `InMemoryStore`.
-  - [ ] Сохранение вердиктов анализа писем с выставляемым TTL (например, 24 часа).
-  - [ ] Использование Redis как распределенного кэша проверок SPF/DKIM.
-- [ ] **Структурированное логирование (`log/slog`):**
-  - [ ] Перевод всех логов со стандартного `log` на пакет `slog`.
-  - [ ] Настройка форматирования логов в формате **JSON** для совместимости с Grafana Loki / ELK.
-- [ ] **Надежность и Таймауты (`context.Context`):**
-  - [ ] Добавление `context.WithTimeout(ctx, 3*time.Second)` для всех DNS и сетевых запросов.
-  - [ ] Защита воркеров от «зависания» при медленном ответе сторонних DNS-серверов.
-
----
-
-## 🟣 ЭТАП 3: REST API и Мониторинг
-
-Предоставление внешнего интерфейса для доступа к результатам сканирования:
-
-- [ ] **Параллельный HTTP-сервер (`net/http`):**
-  - [ ] `GET /api/v1/emails` — получение списка последних проанализированных писем.
-  - [ ] `GET /api/v1/emails/{id}` — получение детального отчета о безопасности конкретного письма.
-  - [ ] `GET /api/v1/stats` — сводная статистика угроз (всего писем, спам, сбои SPF/DKIM).
-  - [ ] `GET /health` — эндпоинт состояния сервиса (Health Check).
+- [ ] **Integration mit Redis (`github.com/redis/go-redis/v9`):**
+  - [ ] Implementierung von `RedisStore` als Ersatz für `InMemoryStore`.
+  - [ ] Speicherung der E-Mail-Analyseergebnisse mit gesetzter TTL (z. B. 24 Stunden).
+  - [ ] Nutzung von Redis als verteilten Cache für SPF/DKIM-Prüfungen.
+- [ ] **Strukturiertes Logging (`log/slog`):**
+  - [ ] Umstellung aller Logs vom Standardpaket `log` auf `slog`.
+  - [ ] Konfiguration der Log-Formatierung im **JSON**-Format zur Kompatibilität mit Grafana Loki / ELK.
+- [ ] **Zuverlässigkeit und Timeouts (`context.Context`):**
+  - [ ] Hinzufügen von `context.WithTimeout(ctx, 3*time.Second)` für alle DNS- und Netzwerkanfragen.
+  - [ ] Schutz der Worker vor „Hängenbleiben" bei langsamer Antwort externer DNS-Server.
 
 ---
 
-## 🟠 ЭТАП 4: AI / LLM Анализ Фишинга
+## 🟣 ETAPPE 3: REST API und Monitoring
 
-Интеграция ИИ для интеллектуальной оценки подозрительных писем (в соответствии со стеком вакансии):
+Bereitstellung einer externen Schnittstelle für den Zugriff auf Scan-Ergebnisse:
 
-- [ ] **Модуль `ai_analyzer.go`:**
-  - [ ] Интеграция с API Claude / OpenAI.
-  - [ ] Отправка подозрительного текста писем на анализ социальной инженерии.
-  - [ ] Формирование итогового Risk Score (от 1 до 10) на основе ответа LLM.
-
----
-
-## ⚪ ЭТАП 5: Качество кода и Тестирование
-
-- [ ] Расширение юнит-тестов (покрытие логики проверок SPF, URL и вложений).
-- [ ] Проведение нагрузочного тестирования (Stress-test отправки 1000 писем через Bun/Go).
-- [ ] Настройка `golangci-lint` в GitHub Actions.
+- [ ] **Paralleler HTTP-Server (`net/http`):**
+  - [ ] `GET /api/v1/emails` — Abrufen der Liste zuletzt analysierter E-Mails.
+  - [ ] `GET /api/v1/emails/{id}` — Abrufen eines detaillierten Sicherheitsberichts zu einer bestimmten E-Mail.
+  - [ ] `GET /api/v1/stats` — zusammenfassende Bedrohungsstatistik (Gesamtzahl E-Mails, Spam, SPF/DKIM-Fehlschläge).
+  - [ ] `GET /health` — Endpoint für den Servicestatus (Health Check).
 
 ---
 
-## 💡 Порядок выполнения текущих задач
+## 🟠 ETAPPE 4: AI / LLM-Phishing-Analyse
 
-1. **Замена `InMemoryStore` на Redis** + перенос логов на **`slog` (JSON)**.
-2. **Добавление детектора опасных ссылок (URL Extractor)** и **сканера вложений**.
-3. **Реализация REST API (`GET /api/v1/emails`)**.
-4. **Интеграция DKIM / DMARC**.
+Integration von KI zur intelligenten Bewertung verdächtiger E-Mails (passend zum Stack der Stellenausschreibung):
+
+- [ ] **Modul `ai_analyzer.go`:**
+  - [ ] Integration mit der Claude- / OpenAI-API.
+  - [ ] Versand verdächtiger E-Mail-Texte zur Analyse auf Social Engineering.
+  - [ ] Ermittlung eines abschließenden Risk Score (von 1 bis 10) auf Basis der LLM-Antwort.
+
+---
+
+## ⚪ ETAPPE 5: Codequalität und Testing
+
+- [ ] Erweiterung der Unit-Tests (Abdeckung der Prüflogik für SPF, URLs und Anhänge).
+- [ ] Durchführung von Lasttests (Stress-Test mit 1000 versendeten E-Mails über Bun/Go).
+- [ ] Einrichtung von `golangci-lint` in GitHub Actions.
+
+---
+
+## 💡 Reihenfolge der aktuellen Aufgaben
+
+1. **Ersatz von `InMemoryStore` durch Redis** + Umstellung der Logs auf **`slog` (JSON)**.
+2. **Hinzufügen eines Detektors für gefährliche Links (URL Extractor)** und eines **Anhang-Scanners**.
+3. **Implementierung der REST API (`GET /api/v1/emails`)**.
+4. **Integration von DKIM / DMARC**.

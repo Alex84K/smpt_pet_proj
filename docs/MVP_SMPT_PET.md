@@ -1,70 +1,70 @@
-# MVP Go-MailShield: Конвейер анализа входящей почты
+# MVP Go-MailShield: Pipeline zur Analyse eingehender E-Mails
 
-Этот документ описывает минимально жизнеспособный продукт (MVP) собственного почтового шлюза безопасности (Email Security Gateway) на языке Go. 
-Проект предназначен для развертывания на VPS (например, IONOS) с целью демонстрации навыков работы с сетью, протоколами, конкурентностью в Go и контейнеризацией.
-
----
-
-## 1. Цели и возможности MVP
-
-1. **Прием писем:** Сервер слушает входящие соединения по протоколу SMTP (порт 25) и корректно завершает сессию доставки.
-2. **Парсинг MIME:** Извлечение из сырого потока данных заголовков (Отправитель, Получатель, Тема) и тела письма (Plain Text/HTML).
-3. **Проверка SPF (Базовая безопасность):** Поиск DNS TXT-записей домена отправителя для валидации IP-адреса клиента.
-4. **Очередь обработки (Concurrency):** Принятые письма асинхронно передаются в пул воркеров через каналы Go для изоляции сетевого ввода-вывода от тяжелого анализа.
-5. **Логирование и кэш:** Запись результатов анализа в Redis для кэширования и быстрых проверок.
+Dieses Dokument beschreibt ein Minimum Viable Product (MVP) für ein eigenes E-Mail-Sicherheitsgateway (Email Security Gateway) in Go. 
+Das Projekt ist für die Bereitstellung auf einem VPS (z. B. IONOS) vorgesehen und soll Kenntnisse in den Bereichen Netzwerke, Protokolle, Nebenläufigkeit in Go und Containerisierung demonstrieren.
 
 ---
 
-## 2. Архитектура системы
-[Внешний сервер (Gmail)]
+## 1. Ziele und Funktionen des MVP
+
+1. **E-Mail-Empfang:** Der Server lauscht auf eingehende Verbindungen über das SMTP-Protokoll (Port 25) und beendet die Zustellsitzung korrekt.
+2. **MIME-Parsing:** Extraktion der Header (Absender, Empfänger, Betreff) und des Nachrichtentexts (Plain Text/HTML) aus dem rohen Datenstrom.
+3. **SPF-Prüfung (grundlegende Sicherheit):** Abfrage der DNS-TXT-Einträge der Absenderdomain zur Validierung der Client-IP-Adresse.
+4. **Verarbeitungswarteschlange (Nebenläufigkeit):** Angenommene E-Mails werden asynchron über Go-Channels an einen Worker-Pool übergeben, um die Netzwerk-I/O von der aufwendigen Analyse zu entkoppeln.
+5. **Logging und Cache:** Speicherung der Analyseergebnisse in Redis für Caching und schnelle Prüfungen.
+
+---
+
+## 2. Systemarchitektur
+[Externer Server (Gmail)]
 │ (SMTP, TCP:25)
 ▼
-[IONOS Firewall] (Разрешен порт 25)
+[IONOS Firewall] (Port 25 erlaubt)
 │
 ▼
-[Docker Daemon (VPS)] (Порт-маппинг 25 -> 2525)
+[Docker Daemon (VPS)] (Portmapping 25 -> 2525)
 │
 ▼
 [Go-MailShield Container]
 ├── SMTP Listener (Port 2525) ──► [Go Channels]
-└── Worker Pool (Анализ SPF/MIME) ──► [Redis Container]
+└── Worker Pool (SPF/MIME-Analyse) ──► [Redis Container]
 code
 Code
 ---
 
-## 3. Необходимая инфраструктура
+## 3. Erforderliche Infrastruktur
 
-1. **Доменное имя:** Зарегистрировано у регистратора (например, IONOS).
-2. **Виртуальный сервер (VPS):** 1 vCPU, 1 GB RAM (самый дешевый тариф) под управлением Linux (Ubuntu/Debian).
-3. **Установленное ПО на VPS:** Docker, Docker Compose, Git.
+1. **Domainname:** Registriert bei einem Registrar (z. B. IONOS).
+2. **Virtueller Server (VPS):** 1 vCPU, 1 GB RAM (günstigster Tarif) unter Linux (Ubuntu/Debian).
+3. **Installierte Software auf dem VPS:** Docker, Docker Compose, Git.
 
 ---
 
-## 4. Пошаговая настройка инфраструктуры
+## 4. Schrittweise Einrichtung der Infrastruktur
 
-### Шаг 4.1. Настройка DNS в панели IONOS
+### Schritt 4.1. DNS-Konfiguration im IONOS-Panel
 
-Необходимо создать следующие записи для домена `yourdomain.com`:
+Für die Domain `yourdomain.com` müssen folgende Einträge angelegt werden:
 
-| Тип записи | Имя (Хост) | Значение (Указывает на) | Описание |
+| Eintragstyp | Name (Host) | Wert (Zeigt auf) | Beschreibung |
 | :--- | :--- | :--- | :--- |
-| **A** | `mail.yourdomain.com` | `IP_ВАШЕГО_VPS` | Связывает имя почтового сервера с IP |
-| **MX** | `@` (или оставить пустым) | `mail.yourdomain.com` (приоритет 10) | Указывает, какой сервер принимает почту для домена |
-| **TXT** | `@` | `v=spf1 ip4:IP_ВАШЕГО_VPS -all` | SPF-запись, разрешающая вашему VPS отправлять почту (для будущих тестов) |
+| **A** | `mail.yourdomain.com` | `IP_IHRES_VPS` | Verknüpft den Namen des Mailservers mit der IP |
+| **MX** | `@` (oder leer lassen) | `mail.yourdomain.com` (Priorität 10) | Gibt an, welcher Server E-Mails für die Domain empfängt |
+| **TXT** | `@` | `v=spf1 ip4:IP_IHRES_VPS -all` | SPF-Eintrag, der Ihrem VPS erlaubt, E-Mails zu versenden (für künftige Tests) |
 
-### Шаг 4.2. Настройка брандмауэра в IONOS Cloud Panel
+### Schritt 4.2. Firewall-Konfiguration im IONOS Cloud Panel
 
-1. Перейдите в **Network -> Firewall Policies**.
-2. Добавьте входящее правило для вашего VPS:
-   * **Протокол:** TCP
-   * **Порт:** 25
-   * **Описание:** Разрешить входящий SMTP-трафик
+1. Gehen Sie zu **Network -> Firewall Policies**.
+2. Fügen Sie eine eingehende Regel für Ihren VPS hinzu:
+   * **Protokoll:** TCP
+   * **Port:** 25
+   * **Beschreibung:** Eingehenden SMTP-Verkehr erlauben
 
 ---
 
-## 5. Программный код (Go)
+## 5. Quellcode (Go)
 
-Создайте файл `main.go`. Для реализации SMTP и парсинга MIME используются проверенные библиотеки сообщества, что позволяет сфокусироваться на конвейере обработки.
+Erstellen Sie die Datei `main.go`. Für SMTP und MIME-Parsing werden bewährte Community-Bibliotheken verwendet, sodass der Fokus auf der Verarbeitungs-Pipeline liegen kann.
 
 ```go
 package main
@@ -85,7 +85,7 @@ import (
 	"github.com/mhale/smtpd"
 )
 
-// EmailJob представляет задачу в очереди на анализ
+// EmailJob repräsentiert eine Aufgabe in der Analyse-Warteschlange
 type EmailJob struct {
 	SenderIP string
 	From     string
@@ -94,30 +94,30 @@ type EmailJob struct {
 }
 
 func main() {
-	// Инициализируем очередь (канал) для писем
+	// Initialisieren der Warteschlange (Channel) für E-Mails
 	jobQueue := make(chan EmailJob, 100)
 
-	// Запуск пула воркеров (3 воркера для конкурентной обработки)
+	// Start des Worker-Pools (3 Worker für nebenläufige Verarbeitung)
 	for w := 1; w <= 3; w++ {
 		go worker(w, jobQueue)
 	}
 
-	// Обработчик входящих писем от библиотеки smtpd
+	// Handler für eingehende E-Mails von der smtpd-Bibliothek
 	mailHandler := func(origin net.Addr, from string, to []string, data []byte) error {
 		ip := strings.Split(origin.String(), ":")[0]
 		
-		// Передаем задачу в очередь без блокировки сетевого потока
+		// Übergabe der Aufgabe an die Warteschlange, ohne den Netzwerk-Stream zu blockieren
 		select {
 		case jobQueue <- EmailJob{SenderIP: ip, From: from, To: to, RawData: data}:
-			log.Printf("[MTA] Письмо от %s поставлено в очередь анализа", from)
+			log.Printf("[MTA] E-Mail von %s zur Analyse eingereiht", from)
 		default:
-			log.Printf("[MTA] Внимание: Очередь переполнена. Письмо от %s отклонено", from)
+			log.Printf("[MTA] Achtung: Warteschlange voll. E-Mail von %s abgelehnt", from)
 			return fmt.Errorf("server busy")
 		}
 		return nil
 	}
 
-	// Настройка и запуск SMTP-сервера (слушает локальный порт 2525)
+	// Konfiguration und Start des SMTP-Servers (lauscht auf lokalem Port 2525)
 	addr := "0.0.0.0:2525"
 	server := &smtpd.Server{
 		Addr:         addr,
@@ -129,9 +129,9 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Запуск SMTP-сервера на %s...", addr)
+		log.Printf("Starte SMTP-Server auf %s...", addr)
 		if err := server.ListenAndServe(); err != nil {
-			log.Fatalf("Ошибка SMTP-сервера: %v", err)
+			log.Fatalf("SMTP-Serverfehler: %v", err)
 		}
 	}()
 
@@ -140,41 +140,41 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	log.Println("Завершение работы сервера...")
+	log.Println("Server wird heruntergefahren...")
 	close(jobQueue)
-	// Даем воркерам время завершить текущие задачи
+	// Den Workern Zeit geben, laufende Aufgaben abzuschließen
 	time.Sleep(2 * time.Second)
 }
 
-// Воркер извлекает данные из очереди и проводит анализ безопасности
+// Der Worker entnimmt Daten aus der Warteschlange und führt die Sicherheitsanalyse durch
 func worker(id int, queue <-chan EmailJob) {
-	log.Printf("[Worker %d] Запущен", id)
+	log.Printf("[Worker %d] Gestartet", id)
 	for job := range queue {
-		log.Printf("[Worker %d] Начало анализа письма от %s", id, job.From)
+		log.Printf("[Worker %d] Beginne Analyse der E-Mail von %s", id, job.From)
 
-		// 1. Парсинг MIME структуры писем
+		// 1. Parsen der MIME-Struktur der E-Mail
 		envelope, err := enmime.ReadEnvelope(strings.NewReader(string(job.RawData)))
 		if err != nil {
-			log.Printf("[Worker %d] Ошибка парсинга MIME: %v", id, err)
+			log.Printf("[Worker %d] Fehler beim MIME-Parsing: %v", id, err)
 			continue
 		}
 
-		// 2. Базовый анализ SPF
+		// 2. Grundlegende SPF-Analyse
 		spfValid := verifyBasicSPF(job.From, job.SenderIP)
 
-		// 3. Вывод результатов анализа
-		fmt.Printf("\n===== РЕЗУЛЬТАТ АНАЛИЗА (Воркер %d) =====\n", id)
-		fmt.Printf("Отправитель: %s (IP: %s)\n", job.From, job.SenderIP)
-		fmt.Printf("Получатели:  %s\n", strings.Join(job.To, ", "))
-		fmt.Printf("Тема письма: %s\n", envelope.GetHeader("Subject"))
-		fmt.Printf("Валидность SPF: %t\n", spfValid)
-		fmt.Printf("Найдено вложений: %d\n", len(envelope.Attachments))
-		fmt.Printf("Размер текста: %d символов\n", len(envelope.Text))
+		// 3. Ausgabe der Analyseergebnisse
+		fmt.Printf("\n===== ANALYSEERGEBNIS (Worker %d) =====\n", id)
+		fmt.Printf("Absender:    %s (IP: %s)\n", job.From, job.SenderIP)
+		fmt.Printf("Empfänger:   %s\n", strings.Join(job.To, ", "))
+		fmt.Printf("Betreff:     %s\n", envelope.GetHeader("Subject"))
+		fmt.Printf("SPF gültig:  %t\n", spfValid)
+		fmt.Printf("Anhänge gefunden: %d\n", len(envelope.Attachments))
+		fmt.Printf("Textgröße:   %d Zeichen\n", len(envelope.Text))
 		fmt.Printf("=========================================\n\n")
 	}
 }
 
-// Упрощенная проверка SPF через DNS TXT записи
+// Vereinfachte SPF-Prüfung über DNS-TXT-Einträge
 func verifyBasicSPF(fromEmail, senderIP string) bool {
 	parts := strings.Split(fromEmail, "@")
 	if len(parts) < 2 {
@@ -182,7 +182,7 @@ func verifyBasicSPF(fromEmail, senderIP string) bool {
 	}
 	domain := parts[1]
 
-	// Делаем реальный DNS запрос
+	// Echte DNS-Abfrage durchführen
 	txtRecords, err := net.LookupTXT(domain)
 	if err != nil {
 		return false
@@ -190,7 +190,7 @@ func verifyBasicSPF(fromEmail, senderIP string) bool {
 
 	for _, record := range txtRecords {
 		if strings.HasPrefix(record, "v=spf1") {
-			// Проверяем, упомянут ли IP отправителя в SPF-записи (упрощенный поиск подстроки)
+			// Prüfen, ob die Absender-IP im SPF-Eintrag erwähnt wird (vereinfachte Teilstring-Suche)
 			if strings.Contains(record, senderIP) || strings.Contains(record, "all") {
 				return true
 			}
@@ -198,8 +198,8 @@ func verifyBasicSPF(fromEmail, senderIP string) bool {
 	}
 	return false
 }
-6. Контейнеризация
-Для запуска проекта на сервере создайте два конфигурационных файла в той же директории.
+6. Containerisierung
+Um das Projekt auf dem Server auszuführen, erstellen Sie zwei Konfigurationsdateien im selben Verzeichnis.
 Dockerfile
 code
 Dockerfile
@@ -227,7 +227,7 @@ services:
   mailshield:
     build: .
     ports:
-      # Проброс внешнего порта 25 на порт 2525 внутри контейнера
+      # Weiterleitung von externem Port 25 auf Port 2525 innerhalb des Containers
       - "25:2525"
     restart: always
     environment:
@@ -238,23 +238,23 @@ services:
   redis:
     image: redis:alpine
     restart: always
-7. Инструкция по запуску и тестированию
-Склонируйте репозиторий с проектом на ваш VPS.
-Убедитесь, что порты 25 и 2525 не заняты другими службами (например, дефолтным Postfix).
-Запустите стек контейнеров:
+7. Anleitung zum Start und Testen
+Klonen Sie das Projekt-Repository auf Ihren VPS.
+Stellen Sie sicher, dass die Ports 25 und 2525 nicht von anderen Diensten belegt sind (z. B. dem Standard-Postfix).
+Starten Sie den Container-Stack:
 code
 Bash
 docker-compose up -d --build
-Отправьте тестовое письмо с вашего личного почтового ящика (например, Gmail или Яндекс) на любой вымышленный адрес вашего домена, например, test@yourdomain.com.
-Посмотрите логи работы контейнера в реальном времени:
+Senden Sie eine Test-E-Mail von Ihrem persönlichen Postfach (z. B. Gmail oder Yandex) an eine beliebige fiktive Adresse Ihrer Domain, z. B. test@yourdomain.com.
+Sehen Sie sich die Container-Logs in Echtzeit an:
 code
 Bash
 docker-compose logs -f mailshield
-В логах вы увидите, как Go-приложение успешно приняло сессию, передало задачу воркеру, воркер сделал DNS-запросы и распарсил вложения и заголовки входящего письма.
+In den Logs sehen Sie, wie die Go-Anwendung die Sitzung erfolgreich angenommen, die Aufgabe an einen Worker übergeben hat und der Worker DNS-Abfragen durchgeführt sowie Anhänge und Header der eingehenden E-Mail geparst hat.
 code
 Code
 ---
 
-Этот файл описывает весь цикл создания MVP. Вы можете инициализировать проект с помощью `go mod init mailshield` и установить две внешние зависимости:
+Diese Datei beschreibt den gesamten Erstellungszyklus des MVP. Sie können das Projekt mit `go mod init mailshield` initialisieren und zwei externe Abhängigkeiten installieren:
 * `go get github.com/mhale/smtpd`
 * `go get github.com/jhillyerd/enmime`

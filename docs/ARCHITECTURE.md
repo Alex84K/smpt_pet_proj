@@ -1,120 +1,125 @@
-# 🏛️ Go-MailShield — Архитектурный документ
+# 🏛️ Go-MailShield — Architekturdokument
 
-> **Статус:** проектное решение (design doc)
-> **Дата:** 2026-07-24
-> **Домен:** `shk.solutions` (боевой VPS, DNS настроен)
-> **Область:** архитектура эволюции проекта из inbound-only анализатора почты
-> в **фильтрующий email ↔ Telegram мост** для маленькой команды, построенный
-> по гексагональной архитектуре (ports & adapters) с прицелом на подключение
-> кастомного клиента в будущем.
-
----
-
-## Оглавление
-
-1. [Продуктовая концепция](#1-продуктовая-концепция)
-2. [Цели и не-цели](#2-цели-и-не-цели)
-3. [Общая архитектура (Ports & Adapters)](#3-общая-архитектура-ports--adapters)
-4. [Доменная модель](#4-доменная-модель)
-5. [Порты](#5-порты)
-6. [Адаптеры](#6-адаптеры)
-7. [Потоки данных](#7-потоки-данных)
-8. [Multi-user маршрутизация и топология Telegram](#8-multi-user-маршрутизация-и-топология-telegram)
-9. [Состояние переписки (threading)](#9-состояние-переписки-threading)
-10. [Безопасность и доставляемость](#10-безопасность-и-доставляемость)
-11. [Структура пакетов](#11-структура-пакетов)
-12. [Точки расширения: кастомный клиент](#12-точки-расширения-кастомный-клиент)
-13. [Эволюция хранилища](#13-эволюция-хранилища)
-14. [Связь с Roadmap](#14-связь-с-roadmap)
-15. [Журнал ключевых решений (ADR-lite)](#15-журнал-ключевых-решений-adr-lite)
-16. [Открытые вопросы](#16-открытые-вопросы)
+> **Status:** Architekturentscheidung (Design Doc)
+> **Datum:** 2026-07-24
+> **Domain:** `shk.solutions` (Produktiv-VPS, DNS konfiguriert)
+> **Bereich:** Architektur der Weiterentwicklung des Projekts von einem reinen
+> Inbound-Mail-Analyzer zu einer **filternden Email ↔ Telegram-Brücke** für ein
+> kleines Team, aufgebaut nach hexagonaler Architektur (Ports & Adapters) mit
+> Blick auf die künftige Anbindung eines Custom-Clients.
 
 ---
 
-## 1. Продуктовая концепция
+## Inhaltsverzeichnis
 
-Go-MailShield перестаёт быть «тупиком» (принял письмо → распечатал в лог) и
-становится **фильтрующим мостом между email и Telegram**:
-
-- Письма на адреса домена (`fima@shk.solutions`, `boris@shk.solutions`, …)
-  принимаются по SMTP, **проходят анализ безопасности** (SPF/DKIM/DMARC,
-  фишинг, вложения) и **пересылаются владельцу в Telegram** с бейджем вердикта.
-- Ответ сотрудника **прямо в Telegram** превращается в исходящее письмо
-  **от его адреса**, ложится в тот же email-тред и уходит отправителю.
-
-Ключевые следствия концепции:
-
-- **Telegram = почтовый клиент и UI.** Не нужны IMAP, webmail, хранилище
-  ящиков, Dovecot/Roundcube — это снимает тяжёлую ops-нагрузку
-  «почты как у взрослых».
-- **Отличительная черта — не тупой мост, а фильтрующий.** Спам/фишинг
-  предварительно отсеян и помечен; вложения проверяются **до** форварда
-  (scan-before-forward — одновременно фича и защита самого получателя).
-- **Go-ядро остаётся ценностью** (кастомная логика шлюза), а не «я поставил
-  готовый почтовый стек».
+1. [Produktkonzept](#1-produktkonzept)
+2. [Ziele und Nicht-Ziele](#2-ziele-und-nicht-ziele)
+3. [Gesamtarchitektur (Ports & Adapters)](#3-gesamtarchitektur-ports--adapters)
+4. [Domänenmodell](#4-domänenmodell)
+5. [Ports](#5-ports)
+6. [Adapter](#6-adapter)
+7. [Datenflüsse](#7-datenflüsse)
+8. [Multi-User-Routing und Telegram-Topologie](#8-multi-user-routing-und-telegram-topologie)
+9. [Zustand der Konversation (Threading)](#9-zustand-der-konversation-threading)
+10. [Sicherheit und Zustellbarkeit](#10-sicherheit-und-zustellbarkeit)
+11. [Paketstruktur](#11-paketstruktur)
+12. [Erweiterungspunkte: Custom-Client](#12-erweiterungspunkte-custom-client)
+13. [Evolution des Speichers](#13-evolution-des-speichers)
+14. [Verbindung zur Roadmap](#14-verbindung-zur-roadmap)
+15. [Protokoll der Kernentscheidungen (ADR-lite)](#15-protokoll-der-kernentscheidungen-adr-lite)
+16. [Offene Fragen](#16-offene-fragen)
 
 ---
 
-## 2. Цели и не-цели
+## 1. Produktkonzept
 
-### Цели
+Go-MailShield hört auf, eine „Sackgasse" zu sein (Mail empfangen → ins Log
+geschrieben) und wird zu einer **filternden Brücke zwischen Email und
+Telegram**:
 
-- Приём входящей почты по SMTP и анализ безопасности (существующее ядро).
-- Маршрутизация письма → нужному сотруднику в Telegram.
-- Отправка ответа из Telegram → корректное исходящее письмо (threading + DKIM).
-- Поддержка **нескольких ящиков/сотрудников** (multi-user) на одном боте.
-- **Изоляция переписки** между сотрудниками и между тредами.
-- **Заменяемость транспорта**: сегодня Telegram, завтра — кастомный клиент,
-  без переписывания ядра.
+- Mails an Domain-Adressen (`fima@shk.solutions`, `boris@shk.solutions`, …)
+  werden per SMTP angenommen, **durchlaufen eine Sicherheitsanalyse**
+  (SPF/DKIM/DMARC, Phishing, Anhänge) und werden **dem Besitzer in Telegram**
+  mit einem Verdict-Badge zugestellt.
+- Die Antwort des Mitarbeiters **direkt in Telegram** wird zu einer
+  ausgehenden Mail **von seiner Adresse**, landet im selben Email-Thread und
+  geht an den Absender zurück.
 
-### Не-цели (сознательно вне области)
+Wesentliche Konsequenzen des Konzepts:
 
-- ❌ Реимплементация IMAP/POP3, webmail, хранилища ящиков, антиспам-движка
-  с нуля — это годы работы и переизобретение security-критичного софта.
-- ❌ Массовая рассылка (bulk/marketing email).
-- ❌ Открытый релей (open relay) — отправка строго авторизована.
-- ❌ Замена промышленного почтового провайдера для критичной переписки.
+- **Telegram = Mail-Client und UI.** Kein IMAP, kein Webmail, keine
+  Mailbox-Speicherung, kein Dovecot/Roundcube nötig — das nimmt die schwere
+  Ops-Last „Mail wie bei den Großen" weg.
+- **Das Unterscheidungsmerkmal ist keine dumme Brücke, sondern eine
+  filternde.** Spam/Phishing wird vorab aussortiert und markiert; Anhänge
+  werden **vor** der Weiterleitung geprüft (scan-before-forward — gleichzeitig
+  Feature und Schutz des Empfängers selbst).
+- **Der Go-Kern bleibt der eigentliche Wert** (Custom-Logik des Gateways),
+  nicht „ich habe einen fertigen Mail-Stack installiert".
 
 ---
 
-## 3. Общая архитектура (Ports & Adapters)
+## 2. Ziele und Nicht-Ziele
 
-Принцип: **ядро (домен) объявляет интерфейсы-порты; адаптеры их реализуют;
-все зависимости смотрят внутрь.** Ядро никогда не импортирует `tgbotapi`,
-`smtpd`, `redis`, `net.Addr` — транспорт и инфраструктура заменяются без правок
-домена.
+### Ziele
 
-Порты делятся на два класса:
+- Empfang eingehender Mail per SMTP und Sicherheitsanalyse (bestehender Kern).
+- Routing der Mail → an den richtigen Mitarbeiter in Telegram.
+- Versand der Antwort aus Telegram → korrekte ausgehende Mail (Threading + DKIM).
+- Unterstützung **mehrerer Mailboxen/Mitarbeiter** (Multi-User) auf einem Bot.
+- **Isolation der Korrespondenz** zwischen Mitarbeitern und zwischen Threads.
+- **Austauschbarkeit des Transports**: heute Telegram, morgen — ein
+  Custom-Client, ohne den Kern umzuschreiben.
 
-- **Driving (входные / primary)** — как внешний мир *дёргает* приложение
-  (use-cases, которые ядро выставляет наружу).
-- **Driven (выходные / secondary)** — что приложению *нужно снаружи*
-  (ядро объявляет интерфейс, инфраструктура реализует).
+### Nicht-Ziele (bewusst außerhalb des Scopes)
+
+- ❌ Reimplementierung von IMAP/POP3, Webmail, Mailbox-Speicherung, eines
+  Antispam-Engines von Grund auf — das sind Jahre an Arbeit und die
+  Neuerfindung sicherheitskritischer Software.
+- ❌ Massenversand (Bulk-/Marketing-Mail).
+- ❌ Offenes Relay (Open Relay) — der Versand ist strikt autorisiert.
+- ❌ Ersatz eines professionellen Mail-Providers für kritische Korrespondenz.
+
+---
+
+## 3. Gesamtarchitektur (Ports & Adapters)
+
+Prinzip: **der Kern (Domäne) deklariert Schnittstellen-Ports; Adapter
+implementieren sie; alle Abhängigkeiten zeigen nach innen.** Der Kern
+importiert niemals `tgbotapi`, `smtpd`, `redis`, `net.Addr` — Transport und
+Infrastruktur werden ausgetauscht, ohne die Domäne zu ändern.
+
+Ports werden in zwei Klassen unterteilt:
+
+- **Driving (eingehend / primary)** — wie die Außenwelt die Anwendung
+  *anstößt* (Use-Cases, die der Kern nach außen anbietet).
+- **Driven (ausgehend / secondary)** — was die Anwendung *von außen braucht*
+  (der Kern deklariert die Schnittstelle, die Infrastruktur implementiert sie).
 
 ```mermaid
 flowchart LR
-    subgraph DRIVING["Driving-адаптеры (входные)"]
-        SMTP["SMTP listener"]
-        TGIN["Telegram updates"]
-        HTTP["HTTP/WS кастом-клиент<br/>(будущее)"]
+    subgraph DRIVING["Driving-Adapter (eingehend)"]
+        SMTP["SMTP Listener"]
+        TGIN["Telegram Updates"]
+        HTTP["HTTP/WS Custom-Client<br/>(zukünftig)"]
     end
 
-    subgraph CORE["ЯДРО / ДОМЕН"]
+    subgraph CORE["KERN / DOMÄNE"]
         direction TB
         UC1["MailIngestor"]
         UC2["ReplyService"]
-        DOM["Доменная логика:<br/>анализ • маршрутизация •<br/>threading • авторизация"]
+        DOM["Domänenlogik:<br/>Analyse • Routing •<br/>Threading • Autorisierung"]
         UC1 --> DOM
         UC2 --> DOM
     end
 
-    subgraph DRIVEN["Driven-адаптеры (выходные)"]
+    subgraph DRIVEN["Driven-Adapter (ausgehend)"]
         NOTIF["Telegram Notifier"]
-        MAILER["Mailer (relay/direct + DKIM)"]
-        STORE["ConversationStore (memory/redis)"]
-        REG["UserRegistry (config/db)"]
+        MAILER["Mailer (Relay/Direct + DKIM)"]
+        STORE["ConversationStore (Memory/Redis)"]
+        REG["UserRegistry (Config/DB)"]
         VERD["Verdicter (DNS/SPF/DKIM/LLM)"]
-        CUSTOM["Custom-client Notifier<br/>(будущее)"]
+        CUSTOM["Custom-Client Notifier<br/>(zukünftig)"]
     end
 
     SMTP --> UC1
@@ -129,348 +134,360 @@ flowchart LR
     DOM -.-> CUSTOM
 ```
 
-> **Важно:** Telegram присутствует **с обеих сторон** гексагона — как
-> driving-адаптер (входящий reply дёргает `ReplyService`) и как driven-адаптер
-> (`Notifier`, ядро пушит уведомление). Будущий кастомный клиент подключается
-> **точно так же — парой адаптеров** к уже существующим портам.
+> **Wichtig:** Telegram ist **auf beiden Seiten** des Hexagons präsent — als
+> Driving-Adapter (eingehende Antwort stößt `ReplyService` an) und als
+> Driven-Adapter (`Notifier`, der Kern pusht die Benachrichtigung). Ein
+> künftiger Custom-Client wird **genau so angebunden — als Paar von
+> Adaptern** an die bereits bestehenden Ports.
 
-### Дисциплина границ (где такие проекты обычно текут)
+### Grenzdisziplin (wo solche Projekte üblicherweise „lecken")
 
-Транспортные понятия **не просачиваются в ядро**. `chat_id`,
-`message_thread_id` — язык Telegram. Ядро оперирует только доменными
-идентификаторами: `UserID`, `ConversationID`. Перевод
-`(chat_id, thread_id) ↔ (UserID, ConversationID)` выполняет **Telegram-адаптер
-на своей границе**. Кастомный клиент переведёт свои идентификаторы в те же
-доменные — и потому любой клиент взаимозаменяем.
+Transportbegriffe **sickern nicht in den Kern**. `chat_id`,
+`message_thread_id` sind Telegram-Sprache. Der Kern arbeitet nur mit
+Domänen-Identifikatoren: `UserID`, `ConversationID`. Die Übersetzung
+`(chat_id, thread_id) ↔ (UserID, ConversationID)` übernimmt der
+**Telegram-Adapter an seiner eigenen Grenze**. Ein Custom-Client übersetzt
+seine Identifikatoren in dieselben Domänen-IDs — und darum ist jeder Client
+austauschbar.
 
 ---
 
-## 4. Доменная модель
+## 4. Domänenmodell
 
-Чистые типы без инфраструктурных зависимостей.
+Reine Typen ohne Infrastruktur-Abhängigkeiten.
 
-| Тип | Назначение |
+| Typ | Zweck |
 | :--- | :--- |
-| `RawEmail` | Сырые байты письма + конверт (IP отправителя, `MAIL FROM`, `RCPT TO[]`). |
-| `ParsedEmail` | Результат разбора MIME: заголовки, `Subject`, текст/HTML, вложения, `Message-ID`. |
-| `Verdict` | Итог анализа: SPF/DKIM/DMARC, фишинг-эвристики, находки во вложениях, интегральный risk score (1–10), метка `clean`/`suspicious`/`malicious`. |
-| `User` / `Mailbox` | Адрес, отображаемое имя, привязки к клиентам, права. |
-| `ConversationID` | Доменный id переписки (не `chat_id`, не `thread_id`). |
-| `EmailThread` | `Message-ID`, `References`, `Subject`, внешний участник, владелец (`User`). |
-| `Notification` | То, что пушится клиенту (from/subject/body/verdict/attachments). |
-| `ReplyCommand` | Транспортно-нейтральная команда ответа (actor, conversation, body, attachments). |
-| `OutgoingMessage` | Готовое к подписи и отправке письмо (From, To, Subject, In-Reply-To, References, тело, вложения). |
+| `RawEmail` | Rohe Mail-Bytes + Umschlag (Absender-IP, `MAIL FROM`, `RCPT TO[]`). |
+| `ParsedEmail` | Ergebnis des MIME-Parsings: Header, `Subject`, Text/HTML, Anhänge, `Message-ID`. |
+| `Verdict` | Ergebnis der Analyse: SPF/DKIM/DMARC, Phishing-Heuristiken, Funde in Anhängen, integrierter Risk Score (1–10), Label `clean`/`suspicious`/`malicious`. |
+| `User` / `Mailbox` | Adresse, Anzeigename, Client-Bindungen, Rechte. |
+| `ConversationID` | Domänen-ID der Korrespondenz (nicht `chat_id`, nicht `thread_id`). |
+| `EmailThread` | `Message-ID`, `References`, `Subject`, externer Teilnehmer, Besitzer (`User`). |
+| `Notification` | Das, was an den Client gepusht wird (from/subject/body/verdict/attachments). |
+| `ReplyCommand` | Transportneutraler Antwort-Befehl (Actor, Conversation, Body, Attachments). |
+| `OutgoingMessage` | Signier- und versandfertige Mail (From, To, Subject, In-Reply-To, References, Body, Anhänge). |
 
 ---
 
-## 5. Порты
+## 5. Ports
 
-Порты держим **крупными, на уровне use-case** (не «интерфейс на каждый вызов БД»).
+Ports halten wir **grob, auf Use-Case-Ebene** (nicht „eine Schnittstelle pro
+DB-Aufruf").
 
 ```go
 package core
 
 import "context"
 
-// ---- DRIVING (входные) порты: use-cases, которые ядро выставляет ----
+// ---- DRIVING (eingehende) Ports: Use-Cases, die der Kern anbietet ----
 
-// Вызывается SMTP-адаптером на каждое принятое письмо.
+// Wird vom SMTP-Adapter für jede empfangene Mail aufgerufen.
 type MailIngestor interface {
     Ingest(ctx context.Context, raw RawEmail) error
 }
 
-// Вызывается Telegram-адаптером (и будущим кастом-клиентом) при ответе.
+// Wird vom Telegram-Adapter (und einem künftigen Custom-Client) bei einer Antwort aufgerufen.
 type ReplyService interface {
     SubmitReply(ctx context.Context, cmd ReplyCommand) error
 }
 
-// ReplyCommand транспортно-нейтральна: адаптер уже перевёл свои id в доменные
-// и аутентифицировал актора.
+// ReplyCommand ist transportneutral: der Adapter hat seine IDs bereits in
+// Domänen-IDs übersetzt und den Actor authentifiziert.
 type ReplyCommand struct {
-    Actor        UserID         // кто отвечает (аутентифицирован адаптером)
-    Conversation ConversationID // доменный id, НЕ chat_id/thread_id
+    Actor        UserID         // wer antwortet (vom Adapter authentifiziert)
+    Conversation ConversationID // Domänen-ID, NICHT chat_id/thread_id
     Body         string
     Attachments  []Attachment
 }
 
-// ---- DRIVEN (выходные) порты: что ядру нужно снаружи ----
+// ---- DRIVEN (ausgehende) Ports: was der Kern von außen braucht ----
 
-// Notifier — сюда подключается ЛЮБОЙ клиент (Telegram, кастомный, …).
+// Notifier — hier bindet sich JEDER Client an (Telegram, Custom, …).
 type Notifier interface {
     Notify(ctx context.Context, n Notification) error
 }
 
-// MailSender — доставка исходящего письма (relay/direct MTA).
+// MailSender — Zustellung der ausgehenden Mail (Relay/Direct MTA).
 type MailSender interface {
     Send(ctx context.Context, msg OutgoingMessage) error
 }
 
-// MessageSigner — DKIM-подпись исходящего (d=shk.solutions).
+// MessageSigner — DKIM-Signatur der ausgehenden Mail (d=shk.solutions).
 type MessageSigner interface {
     Sign(msg *OutgoingMessage) error
 }
 
-// ConversationStore — маппинг переписки ↔ email-тред.
+// ConversationStore — Mapping Konversation ↔ Email-Thread.
 type ConversationStore interface {
     Link(id ConversationID, thread EmailThread) error
     Resolve(id ConversationID) (EmailThread, bool)
 }
 
-// UserRegistry — реестр сотрудников и авторизация.
+// UserRegistry — Verzeichnis der Mitarbeiter und Autorisierung.
 type UserRegistry interface {
     ByEmail(addr string) (User, bool)
     Authorize(actor UserID, fromAddr string) bool
 }
 
-// Verdicter — анализ безопасности; внутри сам зовёт driven-порты DNS/LLM.
+// Verdicter — Sicherheitsanalyse; ruft intern selbst die Driven-Ports DNS/LLM auf.
 type Verdicter interface {
     Analyze(ctx context.Context, e ParsedEmail) Verdict
 }
 ```
 
-Подчинённые driven-порты `Verdicter` (реализуются инфраструктурными адаптерами):
-`DNSResolver`, `SPFChecker`, `DKIMVerifier`, `DMARCEvaluator`, `LLMRiskScorer`.
+Untergeordnete Driven-Ports von `Verdicter` (implementiert von
+Infrastruktur-Adaptern): `DNSResolver`, `SPFChecker`, `DKIMVerifier`,
+`DMARCEvaluator`, `LLMRiskScorer`.
 
 ---
 
-## 6. Адаптеры
+## 6. Adapter
 
-| Класс | Адаптер | Реализует / дёргает | Технология |
+| Klasse | Adapter | Implementiert / ruft auf | Technologie |
 | :--- | :--- | :--- | :--- |
-| Driving | `smtp` | дёргает `MailIngestor` | `mhale/smtpd` или `emersion/go-smtp` |
-| Driving | `telegram` (updates) | дёргает `ReplyService` | long-polling `getUpdates` |
-| Driving | `httpapi` *(будущее)* | дёргает `ReplyService` | REST/WS/gRPC |
+| Driving | `smtp` | ruft `MailIngestor` auf | `mhale/smtpd` oder `emersion/go-smtp` |
+| Driving | `telegram` (updates) | ruft `ReplyService` auf | Long-Polling `getUpdates` |
+| Driving | `httpapi` *(zukünftig)* | ruft `ReplyService` auf | REST/WS/gRPC |
 | Driven | `telegram` (notifier) | `Notifier` | Bot API `sendMessage`/`sendDocument` |
-| Driven | `mailer` | `MailSender` + `MessageSigner` | relay (smart host) / direct MTA, DKIM |
-| Driven | `store` | `ConversationStore`, `UserRegistry` | in-memory → **SQLite** (`modernc.org/sqlite`, без cgo); Postgres/Redis — ветки роста |
-| Driven | `dns` | `DNSResolver`/`SPFChecker`/… | `net.LookupTXT/MX`, `context` timeouts |
-| Driven | `llm` *(будущее)* | `LLMRiskScorer` | Claude/OpenAI API |
-| Driven | `customclient` *(будущее)* | `Notifier` | push/WS |
+| Driven | `mailer` | `MailSender` + `MessageSigner` | Relay (Smart Host) / Direct MTA, DKIM |
+| Driven | `store` | `ConversationStore`, `UserRegistry` | In-Memory → **SQLite** (`modernc.org/sqlite`, ohne cgo); Postgres/Redis — Wachstumspfade |
+| Driven | `dns` | `DNSResolver`/`SPFChecker`/… | `net.LookupTXT/MX`, `context`-Timeouts |
+| Driven | `llm` *(zukünftig)* | `LLMRiskScorer` | Claude/OpenAI API |
+| Driven | `customclient` *(zukünftig)* | `Notifier` | Push/WS |
 
-> Telegram — это **два адаптера**, разделяющие один клиент бота: driving
-> (слушает updates, инициирует reply) и driven (пушит уведомления). Это норма.
+> Telegram ist **zwei Adapter**, die sich einen Bot-Client teilen: Driving
+> (hört auf Updates, initiiert Reply) und Driven (pusht Benachrichtigungen).
+> Das ist normal.
 
 ---
 
-## 7. Потоки данных
+## 7. Datenflüsse
 
-### 7.1. Входящий: email → Telegram
+### 7.1. Eingehend: Email → Telegram
 
 ```mermaid
 sequenceDiagram
-    participant Ext as Внешний отправитель
-    participant SMTP as smtp-адаптер (driving)
-    participant Core as Ядро
+    participant Ext as Externer Absender
+    participant SMTP as smtp-Adapter (driving)
+    participant Core as Kern
     participant Verd as Verdicter (driven)
     participant Reg as UserRegistry (driven)
     participant Store as ConversationStore (driven)
     participant TG as Telegram Notifier (driven)
 
-    Ext->>SMTP: SMTP DATA (письмо на boris@)
+    Ext->>SMTP: SMTP DATA (Mail an boris@)
     SMTP->>Core: MailIngestor.Ingest(RawEmail)
-    Core->>Core: parse MIME → ParsedEmail
+    Core->>Core: Parse MIME → ParsedEmail
     Core->>Verd: Analyze(ParsedEmail)
-    Verd-->>Core: Verdict (SPF/DKIM/phishing/risk)
+    Verd-->>Core: Verdict (SPF/DKIM/Phishing/Risk)
     Core->>Reg: ByEmail("boris@shk.solutions")
     Reg-->>Core: User{Boris}
     Core->>Store: Link(ConversationID, EmailThread)
-    Core->>TG: Notify(Notification{User=Boris, verdict, …})
-    TG-->>TG: перевод UserID→chat_id, создать/найти топик
-    TG->>TG: sendMessage(chat_id, thread_id, текст + бейдж)
+    Core->>TG: Notify(Notification{User=Boris, Verdict, …})
+    TG-->>TG: Übersetzung UserID→chat_id, Topic erstellen/finden
+    TG->>TG: sendMessage(chat_id, thread_id, Text + Badge)
 ```
 
-### 7.2. Исходящий: Telegram → email
+### 7.2. Ausgehend: Telegram → Email
 
 ```mermaid
 sequenceDiagram
-    participant Boris as Борис (Telegram)
-    participant TGin as telegram-адаптер (driving)
-    participant Core as Ядро
+    participant Boris as Boris (Telegram)
+    participant TGin as telegram-Adapter (driving)
+    participant Core as Kern
     participant Reg as UserRegistry (driven)
     participant Store as ConversationStore (driven)
     participant Sign as MessageSigner (driven)
     participant Mail as MailSender (driven)
-    participant Ext as Внешний получатель
+    participant Ext as Externer Empfänger
 
-    Boris->>TGin: reply в топике
-    TGin-->>TGin: перевод (chat_id, thread_id) → (UserID, ConversationID)
+    Boris->>TGin: Antwort im Topic
+    TGin-->>TGin: Übersetzung (chat_id, thread_id) → (UserID, ConversationID)
     TGin->>Core: ReplyService.SubmitReply(ReplyCommand)
     Core->>Reg: Authorize(actor=Boris, from="boris@shk.solutions")
     Reg-->>Core: ok
     Core->>Store: Resolve(ConversationID)
     Store-->>Core: EmailThread{Message-ID, References, To}
-    Core->>Core: собрать OutgoingMessage (From=boris@, In-Reply-To, Re:)
+    Core->>Core: OutgoingMessage zusammenstellen (From=boris@, In-Reply-To, Re:)
     Core->>Sign: Sign(msg)  %% DKIM d=shk.solutions
     Core->>Mail: Send(OutgoingMessage)
-    Mail->>Ext: SMTP-доставка (relay/direct)
+    Mail->>Ext: SMTP-Zustellung (relay/direct)
 ```
 
 ---
 
-## 8. Multi-user маршрутизация и топология Telegram
+## 8. Multi-User-Routing und Telegram-Topologie
 
-Переход от одного `support@` к нескольким ящикам — это **обобщение**, а не
-переделка. Добавляется слой **маршрутизации по получателю**.
+Der Übergang von einem einzigen `support@` zu mehreren Mailboxen ist eine
+**Verallgemeinerung**, keine Neukonstruktion. Es kommt eine Schicht **Routing
+nach Empfänger** hinzu.
 
-- **Входящее:** `RCPT TO` → `UserRegistry.ByEmail` → чат нужного сотрудника.
-- **Исходящее:** апдейт из чата Бориса → `From: boris@shk.solutions`.
-- **Авторизация per-user:** `chat_id` Бориса может слать **только** от `boris@`.
-- **DKIM:** подпись по домену (`d=shk.solutions`) → **один ключ на все адреса**.
-- **Неизвестный получатель:** `550 unknown user` (чище catch-all, без backscatter).
-- **Алиасы/рассылки:** `team@` → fan-out в чаты нескольких сотрудников (падает
-  из той же модели маршрутизации).
+- **Eingehend:** `RCPT TO` → `UserRegistry.ByEmail` → Chat des zuständigen Mitarbeiters.
+- **Ausgehend:** Update aus Boris' Chat → `From: boris@shk.solutions`.
+- **Autorisierung pro User:** Boris' `chat_id` darf **nur** von `boris@` senden.
+- **DKIM:** Signatur auf Domain-Ebene (`d=shk.solutions`) → **ein Schlüssel für alle Adressen**.
+- **Unbekannter Empfänger:** `550 unknown user` (sauberer als Catch-all, ohne Backscatter).
+- **Aliase/Verteiler:** `team@` → Fan-out in die Chats mehrerer Mitarbeiter
+  (ergibt sich aus demselben Routing-Modell).
 
-### Выбранная топология — «Вариант 2»: личная группа + топики у каждого
+### Gewählte Topologie — „Variante 2": persönliche Gruppe + Topics für jeden
 
-**Один бот** состоит в нескольких приватных supergroup'ах (forum mode):
+**Ein Bot** ist Mitglied mehrerer privater Supergroups (Forum-Modus):
 
 ```
                  ┌─────────────┐
-                 │  ОДИН бот   │  (один токен)
+                 │  EIN Bot    │  (ein Token)
                  └──────┬──────┘
           ┌────────────┴────────────┐
-   [Boris Mail] (forum)       [Fima Mail] (forum)
-    ├─ 🧵 client@acme — Заказ №42     ├─ 🧵 partner@x — Договор
-    └─ 🧵 vendor@corp — Инвойс ⚠️     └─ 🧵 hr@job — Вакансия
-   (Борис + бот)                     (Фима + бот)
+   [Boris Mail] (Forum)       [Fima Mail] (Forum)
+    ├─ 🧵 client@acme — Bestellung Nr. 42     ├─ 🧵 partner@x — Vertrag
+    └─ 🧵 vendor@corp — Rechnung ⚠️           └─ 🧵 hr@job — Stellenangebot
+   (Boris + Bot)                     (Fima + Bot)
 ```
 
-**Как это изолирует на одном боте:**
+**Wie das auf einem einzigen Bot isoliert:**
 
-1. **Между людьми — `chat_id`.** Разные группы; Фима не состоит в группе
-   Бориса → физически не видит его почту. Изоляцию гарантирует Telegram
-   (membership), а не наш код.
-2. **Между переписками — `message_thread_id`.** Forum-топики внутри группы;
-   каждая переписка = отдельный топик.
+1. **Zwischen Personen — `chat_id`.** Unterschiedliche Gruppen; Fima ist
+   nicht Mitglied in Boris' Gruppe → sieht dessen Mail physisch nicht. Die
+   Isolation garantiert Telegram (Membership), nicht unser Code.
+2. **Zwischen Korrespondenzen — `message_thread_id`.** Forum-Topics innerhalb
+   der Gruppe; jede Korrespondenz = ein eigenes Topic.
 
-Каждый входящий `Update` содержит `chat.id` **и** `message_thread_id` — это и
-есть полный «адрес» ответа: первый выбирает человека, второй — тред.
+Jedes eingehende `Update` enthält `chat.id` **und** `message_thread_id` — das
+ist bereits die vollständige „Adresse" der Antwort: Ersteres wählt die
+Person, Letzteres den Thread.
 
-**Требования к настройке:**
+**Anforderungen an die Konfiguration:**
 
-- Один бот у `@BotFather` (один токен на всё).
-- По supergroup на человека, включён **Topics**.
-- Бот — **админ с правом «Manage Topics»** (`can_manage_topics`), иначе не
-  сможет создавать топики через API.
-- `chat_id` каждой группы (большое отрицательное `-100…`) записан в реестр.
+- Ein Bot bei `@BotFather` (ein Token für alles).
+- Eine Supergroup pro Person, **Topics** aktiviert.
+- Der Bot — **Admin mit dem Recht „Manage Topics"** (`can_manage_topics`),
+  sonst kann er über die API keine Topics erstellen.
+- Die `chat_id` jeder Gruppe (große negative Zahl `-100…`) ist im Registry
+  hinterlegt.
 
-**Оговорки:**
+**Vorbehalte:**
 
-- Правильность маршрутизации — **на нашем коде**; баг в `registry` может увести
-  письмо Бориса в чат Фимы. Telegram страхует только чужую видимость.
-- Один бот = **одна точка доверия**: владелец токена технически видит все
-  группы (бот и есть мост). Для маленькой фирмы — приемлемо.
+- Die Korrektheit des Routings liegt **bei unserem Code**; ein Bug im
+  `registry` kann Boris' Mail in Fimas Chat leiten. Telegram sichert nur die
+  Unsichtbarkeit für Fremde ab.
+- Ein Bot = **ein Vertrauenspunkt**: der Token-Besitzer sieht technisch alle
+  Gruppen (der Bot ist die Brücke). Für eine kleine Firma — akzeptabel.
 
-> Про запас: **Вариант 3** — одна общая группа-инбокс с топиками — для
-> командных ящиков (`support@`, `sales@`), где заявку берёт любой свободный.
-> Отличается тем, что даёт **общую видимость** вместо личной почты.
+> Für später: **Variante 3** — eine gemeinsame Inbox-Gruppe mit Topics — für
+> Team-Postfächer (`support@`, `sales@`), bei denen sich jeder freie
+> Mitarbeiter der Anfrage annimmt. Der Unterschied: **gemeinsame
+> Sichtbarkeit** statt persönlicher Mail.
 
 ---
 
-## 9. Состояние переписки (threading)
+## 9. Zustand der Konversation (Threading)
 
-Сердце системы — двусторонний маппинг:
+Das Herzstück des Systems ist ein bidirektionales Mapping:
 
 ```
 ConversationID  ↔  EmailThread{ external_sender, Subject, Message-ID, References }
-             и  ↔  привязка к транспорту клиента (в адаптере: chat_id + thread_id)
+             und  ↔  Bindung an den Client-Transport (im Adapter: chat_id + thread_id)
 ```
 
-- При входящем создаётся `ConversationID`, `ConversationStore.Link(...)`
-  сохраняет email-тред; Telegram-адаптер заводит топик и держит своё
-  соответствие `ConversationID ↔ (chat_id, thread_id)`.
-- При ответе `ConversationStore.Resolve(...)` возвращает `Message-ID`/`References`,
-  чтобы проставить `In-Reply-To`/`References` и `Re: Subject` — тогда ответ
-  ложится **в тот же тред** в почте отправителя.
-- Сейчас — in-memory; далее — Redis/БД с TTL (см. §13).
+- Beim Eingang wird eine `ConversationID` erzeugt, `ConversationStore.Link(...)`
+  speichert den Email-Thread; der Telegram-Adapter legt ein Topic an und hält
+  seine eigene Zuordnung `ConversationID ↔ (chat_id, thread_id)`.
+- Bei einer Antwort liefert `ConversationStore.Resolve(...)` `Message-ID`/`References`,
+  um `In-Reply-To`/`References` und `Re: Subject` zu setzen — so landet die
+  Antwort **im selben Thread** in der Mailbox des Absenders.
+- Aktuell — In-Memory; als Nächstes — Redis/DB mit TTL (siehe §13).
 
 ---
 
-## 10. Безопасность и доставляемость
+## 10. Sicherheit und Zustellbarkeit
 
-### Авторизация (критично)
+### Autorisierung (kritisch)
 
-- Отвечать через бота может **только** привязанный `chat_id`, и **только** от
-  своего адреса (`UserRegistry.Authorize`). Иначе — open relay через Telegram.
-- Вложения и ссылки проверяются **до** форварда в Telegram (не тащить малварь
-  себе же).
+- Über den Bot antworten kann **nur** eine verknüpfte `chat_id`, und **nur**
+  von der eigenen Adresse (`UserRegistry.Authorize`). Sonst — Open Relay über
+  Telegram.
+- Anhänge und Links werden **vor** der Weiterleitung an Telegram geprüft
+  (keine Malware an sich selbst weiterschleppen).
 
-### Доставляемость исходящего (код — 10%, deliverability — 90%)
+### Zustellbarkeit ausgehender Mail (Code — 10 %, Deliverability — 90 %)
 
-Написать SMTP-клиент просто; заставить письмо дойти до инбокса — нет.
-Чек-лист для `shk.solutions`:
+Einen SMTP-Client zu schreiben ist einfach; dafür zu sorgen, dass die Mail im
+Posteingang ankommt — nicht. Checkliste für `shk.solutions`:
 
-| Требование | Зачем | Действие |
+| Anforderung | Wofür | Maßnahme |
 | :--- | :--- | :--- |
-| Исходящий порт 25 | Многие VPS (IONOS) блокируют по умолчанию | Проверить `telnet gmail-smtp-in.l.google.com 25`; запросить разблокировку **или** идти через relay |
-| PTR / rDNS | Без валидного PTR Gmail/Outlook режут | Поставить `mail.shk.solutions` в панели, совпадает с HELO и A |
-| DKIM подпись + DNS | Аутентификация исходящего | Подписывать (`d=shk.solutions`), опубликовать `selector._domainkey` |
-| SPF | Разрешить IP отправлять | `ip4:<IP>` в TXT (не только `-all`) |
-| DMARC | Политика согласования | Начать с `p=none` (мониторинг) |
-| Репутация IP | VPS-диапазоны часто в блок-листах | Проверить на Spamhaus/mxtoolbox |
+| Ausgehender Port 25 | Viele VPS (IONOS) blockieren ihn standardmäßig | `telnet gmail-smtp-in.l.google.com 25` prüfen; Freischaltung beantragen **oder** über ein Relay gehen |
+| PTR / rDNS | Ohne gültigen PTR schneiden Gmail/Outlook ab | `mail.shk.solutions` im Panel setzen, muss mit HELO und A-Record übereinstimmen |
+| DKIM-Signatur + DNS | Authentifizierung des Ausgangs | Signieren (`d=shk.solutions`), `selector._domainkey` veröffentlichen |
+| SPF | IP zum Versenden autorisieren | `ip4:<IP>` im TXT (nicht nur `-all`) |
+| DMARC | Alignment-Policy | Mit `p=none` beginnen (Monitoring) |
+| IP-Reputation | VPS-Bereiche stehen oft auf Blocklisten | Bei Spamhaus/mxtoolbox prüfen |
 
-**Прагматика:** для надёжной доставки — `RelaySender` через reputable smart
-host (SES/Mailgun/Postmark). `DirectMTASender` (свой MX-резолвинг + STARTTLS +
-DSN) держим как альтернативную реализацию `MailSender` для обучения.
-Плюс: ответы тем, кто написал **нам первым**, доходят заметно лучше.
+**Pragmatik:** Für zuverlässige Zustellung — `RelaySender` über einen
+reputablen Smart Host (SES/Mailgun/Postmark). `DirectMTASender` (eigenes
+MX-Resolving + STARTTLS + DSN) behalten wir als alternative Implementierung
+von `MailSender` zu Lernzwecken. Zusatz: Antworten an Leute, die **uns
+zuerst geschrieben haben**, kommen deutlich zuverlässiger an.
 
 ---
 
-## 11. Структура пакетов
+## 11. Paketstruktur
 
 ```
 /internal
   /core
-     model.go            # Email, Verdict, Conversation, User, Reply — чистый домен
-     ports.go            # интерфейсы портов (или split: inbound.go / outbound.go)
-     /app                # реализация use-cases
+     model.go            # Email, Verdict, Conversation, User, Reply — reine Domäne
+     ports.go            # Port-Schnittstellen (oder Split: inbound.go / outbound.go)
+     /app                # Implementierung der Use-Cases
         ingest.go        # MailIngestor
         reply.go         # ReplyService
-        analyze.go       # оркестрация анализа
+        analyze.go       # Orchestrierung der Analyse
   /adapters
      /inbound  (driving)
         /smtp            # → MailIngestor
-        /telegram        # updates → ReplyService
-        /httpapi         # БУДУЩИЙ кастом-клиент → ReplyService
+        /telegram        # Updates → ReplyService
+        /httpapi         # ZUKÜNFTIGER Custom-Client → ReplyService
      /outbound (driven)
-        /telegram        # Notifier (push в TG)
+        /telegram        # Notifier (Push nach TG)
         /mailer          # MailSender + MessageSigner (relay/direct + DKIM)
         /store           # ConversationStore, UserRegistry (memory/redis)
-        /dns   /llm      # зависимости Verdicter
-main.go                  # composition root: единственное место, знающее конкретные типы
+        /dns   /llm      # Abhängigkeiten von Verdicter
+main.go                  # Composition Root: einzige Stelle, die konkrete Typen kennt
 ```
 
-**Правило зависимостей:** `core` не импортирует ничего из `adapters`.
-`adapters` импортируют `core` (реализуют/вызывают порты). `main.go` знает всех
-и связывает (dependency injection).
+**Abhängigkeitsregel:** `core` importiert nichts aus `adapters`.
+`adapters` importieren `core` (implementieren/rufen Ports auf). `main.go`
+kennt alle und verdrahtet sie (Dependency Injection).
 
 ---
 
-## 12. Точки расширения: кастомный клиент
+## 12. Erweiterungspunkte: Custom-Client
 
-Именно ради этого выбрана гексагональная архитектура. Подключение нового
-клиента (web/mobile/desktop) — **три шага, ядро и существующие адаптеры не
-меняются**:
+Genau dafür wurde die hexagonale Architektur gewählt. Die Anbindung eines
+neuen Clients (Web/Mobile/Desktop) — **drei Schritte, Kern und bestehende
+Adapter werden nicht verändert**:
 
-1. **Driving-адаптер** `/adapters/inbound/httpapi` (REST/WS/gRPC): аутентифицирует
-   своего юзера, переводит свои id в доменные (`UserID`/`ConversationID`), зовёт
-   тот же `ReplyService.SubmitReply`.
-2. **Driven-адаптер** `/adapters/outbound/customclient`, реализующий `Notifier`:
-   пушит уведомления в этот клиент.
-3. **Одна строка** проводки в `main.go`.
+1. **Driving-Adapter** `/adapters/inbound/httpapi` (REST/WS/gRPC):
+   authentifiziert seinen eigenen User, übersetzt seine IDs in Domänen-IDs
+   (`UserID`/`ConversationID`), ruft denselben `ReplyService.SubmitReply` auf.
+2. **Driven-Adapter** `/adapters/outbound/customclient`, der `Notifier`
+   implementiert: pusht Benachrichtigungen an diesen Client.
+3. **Eine Zeile** Verdrahtung in `main.go`.
 
-Нужно, чтобы уведомление шло **и** в Telegram, **и** в кастом-клиент —
-заворачиваем оба `Notifier` в **composite (fan-out) Notifier**. Тоже без правок
-ядра.
+Soll die Benachrichtigung **sowohl** an Telegram **als auch** an den
+Custom-Client gehen — verpacken wir beide `Notifier` in einen
+**Composite-(Fan-out)-Notifier**. Ebenfalls ohne Änderungen am Kern.
 
 ```go
-// Composite Notifier: рассылает во все подключённые клиенты.
+// Composite Notifier: verteilt an alle angebundenen Clients.
 type FanOutNotifier struct{ targets []core.Notifier }
 
 func (f FanOutNotifier) Notify(ctx context.Context, n core.Notification) error {
     for _, t := range f.targets {
         if err := t.Notify(ctx, n); err != nil {
-            // логировать/накапливать; не ронять остальные каналы
+            // loggen/sammeln; nicht die übrigen Kanäle mitreißen
         }
     }
     return nil
@@ -479,87 +496,98 @@ func (f FanOutNotifier) Notify(ctx context.Context, n core.Notification) error {
 
 ---
 
-## 13. Эволюция хранилища
+## 13. Evolution des Speichers
 
-**Путь:** `InMemoryStore` → **SQLite (primary)** → *(при необходимости)* Postgres / Redis.
+**Weg:** `InMemoryStore` → **SQLite (primary)** → *(bei Bedarf)* Postgres / Redis.
 
-- **Сейчас (bootstrap):** `InMemoryStore` (потокобезопасный, `sync.RWMutex`) —
-  реализация портов `ConversationStore`/`UserRegistry`. Годится только для
-  первого прогона: **при рестарте теряются маппинги тредов** → входящий ответ
-  из Telegram некуда прицепить (потеряны `Message-ID`/`References`).
-- **База этапа — `SQLiteStore`.** Для текущей задачи (несколько ящиков,
-  человеко-темповый поток писем, один VPS, один бинарник) SQLite — не «затычка»,
-  а правильный дефолт:
-  - **Durability = корректность:** переживает рестарт, маппинги тредов не теряются.
-  - **Реляционность:** `users`/`conversations`/`messages`/`verdicts` со связями
-    и запросами (история, аудит, поиск) — Redis (KV/кэш) для этого неудобен.
-  - **Ноль ops:** один файл, без отдельного контейнера/демона/сети — важно на
-    1 GB VPS.
-  - **ACID:** атомарная связка «переписка + тред + топик» одним коммитом.
-  - **Бэкап** — копированием файла.
-  - **Драйвер — `modernc.org/sqlite` (чистый Go, без cgo)**, чтобы сохранить
-    статическую сборку `CGO_ENABLED=0` (`mattn/go-sqlite3` требует cgo и сломал бы
-    её). При открытии: `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`.
-    Единственный писатель — сам бинарник, конкуренции при таком объёме нет.
-- **Ветки роста (не сейчас):**
-  - **Postgres** — если появится горизонтальное масштабирование / несколько
-    инстансов приложения (SQLite — single-node).
-  - **Redis** — только как **hot-кэш с TTL** (например, кэш ответов DNS/SPF/DKIM),
-    а не как primary-хранилище. Изначальный план из TODO (`RedisStore` как основа)
-    пересмотрен: эти данные — первичные и реляционные, а не кэш.
-- Поскольку это **порт**, любая замена — это адаптер: ядро и клиенты не трогаются.
+- **Aktuell (Bootstrap):** `InMemoryStore` (threadsicher, `sync.RWMutex`) —
+  Implementierung der Ports `ConversationStore`/`UserRegistry`. Taugt nur für
+  den ersten Durchlauf: **beim Neustart gehen die Thread-Mappings verloren**
+  → eine eingehende Antwort aus Telegram hat nichts, woran sie andocken kann
+  (`Message-ID`/`References` verloren).
+- **Basis dieser Phase — `SQLiteStore`.** Für die aktuelle Aufgabe (mehrere
+  Mailboxen, Mail-Aufkommen im menschlichen Tempo, ein VPS, eine Binary) ist
+  SQLite kein „Notbehelf", sondern der richtige Standard:
+  - **Durability = Korrektheit:** übersteht einen Neustart, Thread-Mappings
+    gehen nicht verloren.
+  - **Relationalität:** `users`/`conversations`/`messages`/`verdicts` mit
+    Beziehungen und Abfragen (Historie, Audit, Suche) — dafür ist Redis
+    (KV/Cache) unpraktisch.
+  - **Null Ops:** eine Datei, kein separater Container/Daemon/Netzwerk —
+    wichtig auf einem 1-GB-VPS.
+  - **ACID:** atomare Verknüpfung „Korrespondenz + Thread + Topic" in einem
+    Commit.
+  - **Backup** — durch Kopieren der Datei.
+  - **Treiber — `modernc.org/sqlite` (reines Go, ohne cgo)**, um den
+    statischen Build `CGO_ENABLED=0` zu erhalten (`mattn/go-sqlite3`
+    benötigt cgo und würde ihn brechen). Beim Öffnen:
+    `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`. Einziger
+    Schreiber ist die Binary selbst, bei diesem Volumen gibt es keine
+    Nebenläufigkeit.
+- **Wachstumspfade (nicht jetzt):**
+  - **Postgres** — falls horizontale Skalierung / mehrere
+    Anwendungsinstanzen nötig werden (SQLite ist Single-Node).
+  - **Redis** — nur als **Hot-Cache mit TTL** (z. B. Cache für
+    DNS-/SPF-/DKIM-Antworten), nicht als Primärspeicher. Der ursprüngliche
+    Plan aus dem TODO (`RedisStore` als Basis) wurde revidiert: diese Daten
+    sind primär und relational, kein Cache.
+- Da dies ein **Port** ist, ist jeder Austausch ein Adapter: Kern und Clients
+  bleiben unangetastet.
 
 ---
 
-## 14. Связь с Roadmap
+## 14. Verbindung zur Roadmap
 
-Эта архитектура **осмысливает** существующий `SMPT_SELF_TODO.md` — каждый этап
-получает своё место:
+Diese Architektur **ordnet** das bestehende `SMPT_SELF_TODO.md` ein — jede
+Phase bekommt ihren Platz:
 
-| Этап TODO | Где живёт в архитектуре |
+| TODO-Phase | Wo es in der Architektur lebt |
 | :--- | :--- |
-| DKIM/DMARC (Этап 1) | `Verdicter` (входящий) + `MessageSigner` (исходящий) |
-| Phishing/URL/Attachment (Этап 1) | `Verdicter` эвристики → `Verdict.risk` |
-| SQLite + `slog` + `context` (Этап 2) | `store`-адаптер (`modernc.org/sqlite`) + сквозной `ctx` в портах |
-| REST API (Этап 3) | driving-адаптер `httpapi` (он же — задел под кастом-клиент) |
-| AI/LLM risk score (Этап 4) | driven-порт `LLMRiskScorer` → адаптер `llm` |
-| Тесты/линт (Этап 5) | ядро тестируется на моках портов (без сети) |
+| DKIM/DMARC (Phase 1) | `Verdicter` (eingehend) + `MessageSigner` (ausgehend) |
+| Phishing/URL/Attachment (Phase 1) | `Verdicter`-Heuristiken → `Verdict.risk` |
+| SQLite + `slog` + `context` (Phase 2) | `store`-Adapter (`modernc.org/sqlite`) + durchgängiger `ctx` in den Ports |
+| REST API (Phase 3) | Driving-Adapter `httpapi` (zugleich Vorarbeit für Custom-Client) |
+| AI/LLM Risk Score (Phase 4) | Driven-Port `LLMRiskScorer` → Adapter `llm` |
+| Tests/Linting (Phase 5) | Kern wird mit Port-Mocks getestet (ohne Netzwerk) |
 
-Отдельный выигрыш: **ядро тестируется юнит-тестами на подставных портах** —
-без SMTP, без Telegram, без сети.
+Zusätzlicher Gewinn: **der Kern wird mit Unit-Tests auf Basis von
+Port-Doubles getestet** — ohne SMTP, ohne Telegram, ohne Netzwerk.
 
 ---
 
-## 15. Журнал ключевых решений (ADR-lite)
+## 15. Protokoll der Kernentscheidungen (ADR-lite)
 
-| # | Решение | Причина |
+| # | Entscheidung | Begründung |
 | :--- | :--- | :--- |
-| 1 | Telegram как UI вместо IMAP/webmail | Снимает ops-нагрузку почтового стека; Go-ядро остаётся ценностью |
-| 2 | Гексагональная архитектура | Явная цель — заменяемость клиента без переписывания ядра |
-| 3 | Мост — **фильтрующий** (scan-before-forward) | Дифференциатор + защита получателя от малвари |
-| 4 | Один бот, Вариант 2 (личные группы + топики) | Приватность (chat_id) + треды (thread_id) на одном токене |
-| 5 | Исходящее — предпочтительно через relay | Deliverability; `DirectMTA` — как учебная альтернатива |
-| 6 | Один DKIM-ключ на домен | `d=shk.solutions` покрывает все адреса; проще |
-| 7 | Неизвестный получатель → `550` | Чище catch-all, без backscatter |
-| 8 | Транспортные id не проникают в ядро | Перевод на границе адаптера = взаимозаменяемость клиентов |
-| 9 | **SQLite как primary-хранилище** (вместо Redis из TODO) | Данные первичные, долговечные и реляционные, а не кэш; durability нужна для сохранности маппингов тредов; ноль ops на 1 GB VPS. Драйвер `modernc.org/sqlite` (без cgo) сохраняет статическую сборку `CGO_ENABLED=0`. Redis — только как опциональный TTL-кэш, Postgres — при multi-node |
+| 1 | Telegram als UI statt IMAP/Webmail | Nimmt die Ops-Last des Mail-Stacks; der Go-Kern bleibt der eigentliche Wert |
+| 2 | Hexagonale Architektur | Explizites Ziel: Austauschbarkeit des Clients, ohne den Kern umzuschreiben |
+| 3 | Die Brücke ist **filternd** (scan-before-forward) | Differenzierungsmerkmal + Schutz des Empfängers vor Malware |
+| 4 | Ein Bot, Variante 2 (persönliche Gruppen + Topics) | Privatsphäre (chat_id) + Threads (thread_id) auf einem Token |
+| 5 | Ausgehend vorzugsweise über Relay | Deliverability; `DirectMTA` — als Lernalternative |
+| 6 | Ein DKIM-Schlüssel pro Domain | `d=shk.solutions` deckt alle Adressen ab; einfacher |
+| 7 | Unbekannter Empfänger → `550` | Sauberer als Catch-all, ohne Backscatter |
+| 8 | Transport-IDs dringen nicht in den Kern ein | Übersetzung an der Adapter-Grenze = Austauschbarkeit der Clients |
+| 9 | **SQLite als Primärspeicher** (statt Redis aus dem TODO) | Die Daten sind primär, langlebig und relational, kein Cache; Durability wird gebraucht, um Thread-Mappings zu erhalten; null Ops auf einem 1-GB-VPS. Der Treiber `modernc.org/sqlite` (ohne cgo) erhält den statischen Build `CGO_ENABLED=0`. Redis nur als optionaler TTL-Cache, Postgres bei Multi-Node |
 
 ---
 
-## 16. Открытые вопросы
+## 16. Offene Fragen
 
-- **Онбординг привязки:** статический конфиг (`email ↔ chat_id`) для MVP vs
-  self-service `/link <адрес> <код>` — когда переходить?
-- **Порт 25 у IONOS:** открыт ли исходящий? Если нет и не разблокируют —
-  архитектура смещается к **relay-only**.
-- **Личные vs общие ящики:** `fima@`/`boris@` — личная почта (Вариант 2) или
-  часть общего инбокса (Вариант 3) для каких-то адресов?
-- **Хранение истории:** Telegram как единственный архив, или дублировать
-  переписку в БД для поиска/аудита?
-- **Webhook vs long-polling:** для MVP — long-polling; переход на webhook при
-  росте (нужен публичный HTTPS-эндпоинт, домен уже есть).
+- **Onboarding der Bindung:** statische Konfiguration (`email ↔ chat_id`) für
+  das MVP vs. Self-Service `/link <Adresse> <Code>` — wann umsteigen?
+- **Port 25 bei IONOS:** ist der ausgehende Port offen? Falls nicht und keine
+  Freischaltung erfolgt — verschiebt sich die Architektur zu **Relay-only**.
+- **Persönliche vs. gemeinsame Mailboxen:** `fima@`/`boris@` — persönliche
+  Mail (Variante 2) oder Teil einer gemeinsamen Inbox (Variante 3) für
+  bestimmte Adressen?
+- **Speicherung der Historie:** Telegram als einziges Archiv, oder die
+  Korrespondenz zusätzlich in der DB für Suche/Audit spiegeln?
+- **Webhook vs. Long-Polling:** für das MVP — Long-Polling; Umstieg auf
+  Webhook bei Wachstum (benötigt einen öffentlichen HTTPS-Endpunkt, die
+  Domain existiert bereits).
 
 ---
 
-*Документ описывает целевую архитектуру и решения на 2026-07-24. По мере
-реализации обновляйте разделы §5–§7 (сигнатуры портов) и §15 (журнал решений).*
+*Das Dokument beschreibt die Zielarchitektur und Entscheidungen Stand
+2026-07-24. Im Zuge der Umsetzung aktualisieren Sie die Abschnitte §5–§7
+(Port-Signaturen) und §15 (Entscheidungsprotokoll).*

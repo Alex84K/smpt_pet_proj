@@ -1,109 +1,109 @@
 # MailShield
 
-Email ↔ Telegram bridge for small teams. Receives inbound mail, routes it to a personal Telegram supergroup as forum topics (one topic per external contact), and delivers replies back as real DKIM-signed email — no mail client required.
+E-Mail-↔-Telegram-Brücke für kleine Teams. Empfängt eingehende Mails, leitet sie als Forum-Topics in eine persönliche Telegram-Supergruppe (ein Topic pro externem Kontakt) und stellt Antworten als echte DKIM-signierte E-Mail zu — ganz ohne Mail-Client.
 
 **Live:** `support@shk.solutions` · VPS `82.165.47.33` · Go + Docker
 
 ---
 
-## How it works
+## Funktionsweise
 
 ```
-Internet ──SMTP──▶ MailShield ──▶ SPF check ──▶ Telegram Forum Topic
+Internet ──SMTP──▶ MailShield ──▶ SPF-Prüfung ──▶ Telegram-Forum-Topic
                                                         │
-                                                 user replies in topic
+                                                 Nutzer antwortet im Topic
                                                         │
                                                         ▼
-Internet ◀──SMTP── direct MTA ◀── DKIM sign ◀── ReplyService
+Internet ◀──SMTP── direkter MTA ◀── DKIM-Signatur ◀── ReplyService
 ```
 
-1. Inbound email arrives at port 25 (MX → VPS)
-2. SPF is checked, risk scored 1–10
-3. If the sender is new → a forum **Topic** is created in the user's supergroup
-4. Email is posted as a formatted HTML message in that topic
-5. User replies inside the topic → MailShield sends it as a real email to the original sender
+1. Eingehende E-Mail trifft auf Port 25 ein (MX → VPS)
+2. SPF wird geprüft, Risiko 1–10 bewertet
+3. Ist der Absender neu → wird ein **Topic** in der Supergruppe des Nutzers angelegt
+4. Die E-Mail wird als formatierte HTML-Nachricht in diesem Topic gepostet
+5. Antwortet der Nutzer im Topic → sendet MailShield sie als echte E-Mail an den ursprünglichen Absender
 
 ---
 
-## Architecture
+## Architektur
 
-Hexagonal (ports & adapters). The core domain has no knowledge of SMTP framing, Telegram chat IDs, or SQL — only interfaces.
+Hexagonal (Ports & Adapters). Die Domänenlogik kennt weder SMTP-Framing noch Telegram-Chat-IDs noch SQL — nur Schnittstellen.
 
 ```
-cmd/mailshield/         — composition root
+cmd/mailshield/         — Composition Root
 internal/
   core/
-    model.go            — domain types (User, ParsedEmail, ConversationID…)
-    ports.go            — all interfaces (driving + driven)
+    model.go            — Domänentypen (User, ParsedEmail, ConversationID…)
+    ports.go            — sämtliche Schnittstellen (driving + driven)
     app/
-      ingest.go         — MailIngestor use-case
-      reply.go          — ReplyService use-case
+      ingest.go         — MailIngestor-Use-Case
+      reply.go          — ReplyService-Use-Case
   adapters/
-    inbound/smtp/       — SMTP server (mhale/smtpd)
-    outbound/dns/       — SPF verdicter via net.LookupTXT
-    outbound/mailer/    — direct MTA delivery + DKIM (emersion/go-msgauth)
+    inbound/smtp/       — SMTP-Server (mhale/smtpd)
+    outbound/dns/       — SPF-Verdicter via net.LookupTXT
+    outbound/mailer/    — direkte MTA-Zustellung + DKIM (emersion/go-msgauth)
     sqlite/             — ConversationStore + UserRegistry + TopicIndex + AdminStore
-    telegram/           — forum-topic notifier + update poller
-    fake/, inmem/       — test doubles
-keys/                   — DKIM PEM files (gitignored)
+    telegram/           — Forum-Topic-Notifier + Update-Poller
+    fake/, inmem/       — Test-Doubles
+keys/                   — DKIM-PEM-Dateien (gitignored)
 ```
 
-**Driving ports:** `MailIngestor`, `ReplyService`  
-**Driven ports:** `Notifier`, `MailSender`, `Verdicter`, `ConversationStore`, `UserRegistry`, `TopicIndex`
+**Driving Ports:** `MailIngestor`, `ReplyService`
+**Driven Ports:** `Notifier`, `MailSender`, `Verdicter`, `ConversationStore`, `UserRegistry`, `TopicIndex`
 
 ---
 
-## Prerequisites
+## Voraussetzungen
 
 - Go 1.21+
-- VPS with **port 25 open** (blocked on most residential ISPs)
-- Domain DNS:
+- VPS mit **offenem Port 25** (bei den meisten Consumer-ISPs blockiert)
+- Domain-DNS:
 
-| Record | Value |
+| Eintrag | Wert |
 |--------|-------|
-| `MX` | `shk.solutions.` → VPS IP |
+| `MX` | `shk.solutions.` → VPS-IP |
 | `TXT` (SPF) | `v=spf1 ip4:<VPS_IP> -all` |
-| `TXT` (DKIM) | `mail._domainkey` → public key |
-| `PTR` | VPS IP → `shk.solutions` |
+| `TXT` (DKIM) | `mail._domainkey` → Public Key |
+| `PTR` | VPS-IP → `shk.solutions` |
 
 ---
 
-## Environment variables
+## Umgebungsvariablen
 
-| Variable | Required | Default | Description |
+| Variable | Erforderlich | Standard | Beschreibung |
 |----------|----------|---------|-------------|
-| `TG_TOKEN` | ✓ | — | Telegram Bot token |
-| `TG_ADMIN_ID` | ✓ | — | Telegram `user_id` of the admin who provisions mailboxes |
-| `BIND_ADDR` | | `0.0.0.0:2525` | SMTP listen address inside container |
-| `HOSTNAME` | | `shk.solutions` | SMTP hostname / MAIL FROM domain |
-| `DB_PATH` | | `mailshield.db` | SQLite database path |
-| `DKIM_KEY_PATH` | | `keys/dkim_private.pem` | DKIM RSA private key (PEM) |
-| `DKIM_SELECTOR` | | `mail` | DKIM selector |
-| `SMTP_RELAY_HOST` | | — | Outbound SMTP relay hostname (e.g. `smtp-relay.brevo.com`) |
-| `SMTP_RELAY_PORT` | | `587` | Relay port (STARTTLS) |
-| `SMTP_RELAY_USER` | | — | Relay SMTP login |
-| `SMTP_RELAY_PASS` | | — | Relay SMTP password |
+| `TG_TOKEN` | ✓ | — | Telegram-Bot-Token |
+| `TG_ADMIN_ID` | ✓ | — | Telegram-`user_id` des Admins, der Postfächer anlegt |
+| `BIND_ADDR` | | `0.0.0.0:2525` | SMTP-Listen-Adresse im Container |
+| `HOSTNAME` | | `shk.solutions` | SMTP-Hostname / MAIL-FROM-Domain |
+| `DB_PATH` | | `mailshield.db` | Pfad zur SQLite-Datenbank |
+| `DKIM_KEY_PATH` | | `keys/dkim_private.pem` | privater DKIM-RSA-Schlüssel (PEM) |
+| `DKIM_SELECTOR` | | `mail` | DKIM-Selector |
+| `SMTP_RELAY_HOST` | | — | Hostname des ausgehenden SMTP-Relays (z. B. `smtp-relay.brevo.com`) |
+| `SMTP_RELAY_PORT` | | `587` | Relay-Port (STARTTLS) |
+| `SMTP_RELAY_USER` | | — | Relay-SMTP-Login |
+| `SMTP_RELAY_PASS` | | — | Relay-SMTP-Passwort |
 
-`TG_TOKEN` and `TG_ADMIN_ID` live in `.env`; everything else is in `docker-compose.yml`. To find your `TG_ADMIN_ID`, message the bot — it replies with your `chat_id`.
+`TG_TOKEN` und `TG_ADMIN_ID` liegen in `.env`; alles andere in `docker-compose.yml`. Um die eigene `TG_ADMIN_ID` herauszufinden, dem Bot einfach schreiben — er antwortet mit der `chat_id`.
 
-**Outbound delivery is optional.** Without `SMTP_RELAY_HOST` the service starts and receives mail normally; replies from Telegram are silently skipped (`WARN: outbound relay not configured`). Add relay credentials to `.env` when you want to enable sending.
+**Ausgehende Zustellung ist optional.** Ohne `SMTP_RELAY_HOST` startet der Dienst normal und empfängt Mails wie gewohnt; Antworten aus Telegram werden dann still übersprungen (`WARN: outbound relay not configured`). Relay-Zugangsdaten in `.env` eintragen, sobald der Versand aktiviert werden soll.
 
 ---
 
-## Local run
+## Lokaler Betrieb
 
 ```bash
-# 1. Install dependencies
+# 1. Abhängigkeiten installieren
 go mod download
 
-# 2. Create .env with your bot token and admin user_id
+# 2. .env mit Bot-Token und Admin-user_id anlegen
 printf 'TG_TOKEN=<your_token>\nTG_ADMIN_ID=<your_user_id>\n' > .env
 
-# 3. Run
+# 3. Starten
 export $(cat .env | xargs)
 go run ./cmd/mailshield
 
-# 4. Send a test email (requires Bun)
+# 4. Test-E-Mail senden (benötigt Bun)
 HOST=localhost PORT=2525 bun bun/send.ts
 
 # 5. Tests
@@ -112,37 +112,37 @@ go test ./...
 
 ---
 
-## Deploy to VPS
+## Deployment auf dem VPS
 
-**Directory layout on the server:**
+**Verzeichnisstruktur auf dem Server:**
 
 ```
 /srv/mailshield/
 ├── docker-compose.yml
 ├── Dockerfile
-├── .env                  ← TG_TOKEN + TG_ADMIN_ID — create manually
+├── .env                  ← TG_TOKEN + TG_ADMIN_ID — manuell anlegen
 ├── keys/
-│   └── dkim_private.pem  ← already on VPS from deliverability setup
-└── data/                 ← created by Docker; holds mailshield.db
+│   └── dkim_private.pem  ← bereits auf dem VPS aus dem Deliverability-Setup
+└── data/                 ← wird von Docker angelegt; enthält mailshield.db
 ```
 
-**Sync and start:**
+**Synchronisieren und starten:**
 
 ```bash
-# From local machine
+# Vom lokalen Rechner aus
 rsync -av --exclude='.env' --exclude='data/' \
   ./go_mail_serv/ root@82.165.47.33:/srv/mailshield/
 
-# On VPS
+# Auf dem VPS
 ssh root@82.165.47.33
 cd /srv/mailshield
-printf 'TG_TOKEN=<token>\nTG_ADMIN_ID=<user_id>\n' > .env   # only if not already there
+printf 'TG_TOKEN=<token>\nTG_ADMIN_ID=<user_id>\n' > .env   # nur falls noch nicht vorhanden
 docker compose up -d --build
 docker compose logs -f
 ```
 
-**Starting with an empty database** (one-time reset — the seed users are gone; all
-mailboxes are now created at runtime via Telegram):
+**Start mit leerer Datenbank** (einmaliger Reset — die Seed-User sind weg;
+alle Postfächer werden nun zur Laufzeit über Telegram angelegt):
 
 ```bash
 cd /srv/mailshield
@@ -153,87 +153,89 @@ docker compose up -d --build
 
 ---
 
-## Admin panel (Telegram)
+## Admin-Panel (Telegram)
 
-All mailbox management happens through the bot in a **direct chat with the admin**
-(the account whose `user_id` matches `TG_ADMIN_ID`). No shell, no SQL.
+Die gesamte Postfachverwaltung läuft über den Bot in einem **Direktchat mit dem Admin**
+(dem Account, dessen `user_id` mit `TG_ADMIN_ID` übereinstimmt). Keine Shell, kein SQL.
 
-| Command | Action |
+| Befehl | Aktion |
 |---------|--------|
-| `/adduser email [name]` | Create a mailbox → bot returns a **bind code** |
-| `/bind CODE` | *(run inside the target supergroup)* link that mailbox to this group |
-| `/users` | List mailboxes and their bind status |
-| `/setchat email chat_id` | Manually set a mailbox's chat_id (fallback) |
-| `/deluser email` | Remove a mailbox |
-| `/help` | Show the command list |
+| `/adduser email [name]` | Postfach anlegen → Bot liefert einen **Bind-Code** |
+| `/bind CODE` | *(innerhalb der Ziel-Supergruppe ausführen)* verknüpft dieses Postfach mit der Gruppe |
+| `/users` | Postfächer und ihren Bind-Status auflisten |
+| `/setchat email chat_id` | chat_id eines Postfachs manuell setzen (Fallback) |
+| `/deluser email` | Postfach entfernen |
+| `/help` | Befehlsübersicht anzeigen |
 
-Bind codes are single-use, generated with `crypto/rand`, and stored in the
-`bind_codes` table until consumed.
+Bind-Codes sind Einmal-Codes, erzeugt mit `crypto/rand`, und werden bis zur
+Einlösung in der Tabelle `bind_codes` gespeichert.
 
 ---
 
-## Onboarding a user (Forum Topics)
+## Onboarding eines Nutzers (Forum Topics)
 
-Each user gets their own **supergroup with Topics enabled**. The bot creates one
-topic per external contact automatically. A user's stored chat_id **must** be the
-supergroup id (negative, `-100…`) — that's why binding happens inside the group.
+Jeder Nutzer erhält eine eigene **Supergruppe mit aktivierten Topics**. Der Bot legt
+automatisch ein Topic pro externem Kontakt an. Die gespeicherte chat_id eines Nutzers
+**muss** die ID der Supergruppe sein (negativ, `-100…`) — deshalb erfolgt das Binden
+innerhalb der Gruppe.
 
-**Steps:**
+**Schritte:**
 
-1. Create a Telegram supergroup and enable **Group Settings → Topics ✓**
-2. Add `@your_bot` as admin → grant **Delete messages** and **Manage topics**
-3. Admin (in DM with the bot): `/adduser fima@shk.solutions Fima` → bot replies with a code
-4. Anyone in the supergroup: `/bind <code>` → the bot captures the group id and links it
+1. Eine Telegram-Supergruppe anlegen und **Gruppeneinstellungen → Topics ✓** aktivieren
+2. `@your_bot` als Admin hinzufügen → Rechte **Nachrichten löschen** und **Topics verwalten** vergeben
+3. Admin (im DM mit dem Bot): `/adduser fima@shk.solutions Fima` → Bot antwortet mit einem Code
+4. Beliebiges Mitglied in der Supergruppe: `/bind <code>` → der Bot erfasst die Gruppen-ID und verknüpft sie
 
 ```
-Admin (DM with bot):
+Admin (DM mit dem Bot):
   /adduser fima@shk.solutions Fima
   → ✅ Mailbox created. Bind code: A1B2C3
      Send /bind A1B2C3 in Fima's supergroup.
 
-In Fima's supergroup:
+In Fimas Supergruppe:
   /bind A1B2C3
   → ✅ fima@shk.solutions linked to this group
 ```
 
-No restart needed — the poller reads the DB per-request. The `/bind` step also works
-as a manual fallback via `/setchat email <chat_id>` if you already know the group id
-(the number after `#` in the `web.telegram.org` URL).
+Kein Neustart nötig — der Poller liest die DB pro Anfrage. Der `/bind`-Schritt funktioniert
+auch als manueller Fallback via `/setchat email <chat_id>`, falls die Gruppen-ID bereits
+bekannt ist (die Zahl nach `#` in der `web.telegram.org`-URL).
 
 ---
 
-## Users and aliases
+## Nutzer und Aliasse
 
-The database **starts empty**. Mailboxes are created at runtime by the admin via
-`/adduser`; after that, the database is the sole source of truth. The admin's
-authority comes from `TG_ADMIN_ID` (env), independent of the `users` table — so the
-admin can bootstrap everything on a fresh database. Note the admin still needs their
-own `/adduser` to *receive* mail.
+Die Datenbank **startet leer**. Postfächer werden zur Laufzeit vom Admin per
+`/adduser` angelegt; danach ist die Datenbank die einzige Quelle der Wahrheit. Die
+Autorität des Admins kommt aus `TG_ADMIN_ID` (env), unabhängig von der `users`-Tabelle
+— so kann der Admin alles auf einer frischen Datenbank bootstrappen. Zu beachten: auch
+der Admin braucht ein eigenes `/adduser`, um Mails **empfangen** zu können.
 
-| Address | Type | Description |
+| Adresse | Typ | Beschreibung |
 |---------|------|-------------|
-| `boris@shk.solutions` | user | created via `/adduser`, bound to a supergroup |
-| `fima@shk.solutions` | user | created via `/adduser`, bound to a supergroup |
-| `team@shk.solutions` | alias | fan-out → all active users (configured in `main.go`) |
+| `boris@shk.solutions` | Nutzer | angelegt via `/adduser`, an eine Supergruppe gebunden |
+| `fima@shk.solutions` | Nutzer | angelegt via `/adduser`, an eine Supergruppe gebunden |
+| `team@shk.solutions` | Alias | Fan-out → an alle aktiven Nutzer (konfiguriert in `main.go`) |
 
 ---
 
-## Observability & hardening (Etap 7)
+## Observability & Hardening (Etappe 7)
 
-### Structured logging
+### Strukturiertes Logging
 
-All log output is JSON (`log/slog` with `JSONHandler`). Each line is a machine-parseable
-object — easy to `grep` with `jq` or forward to a log aggregator:
+Sämtliche Log-Ausgaben sind JSON (`log/slog` mit `JSONHandler`). Jede Zeile ist ein
+maschinenlesbares Objekt — leicht mit `jq` zu filtern oder an einen Log-Aggregator
+weiterzuleiten:
 
 ```bash
-# on VPS — filter by level
+# auf dem VPS — nach Level filtern
 docker compose logs -f | jq 'select(.level=="ERROR")'
 
-# watch delivery attempts
+# Zustellversuche beobachten
 docker compose logs -f | jq 'select(.msg=="delivering")'
 ```
 
-Typical startup output:
+Typische Startausgabe:
 
 ```json
 {"time":"...","level":"INFO","msg":"sqlite ready","path":"/app/data/mailshield.db"}
@@ -242,53 +244,54 @@ Typical startup output:
 {"time":"...","level":"INFO","msg":"MailShield started","bind":"0.0.0.0:2525","domain":"shk.solutions","admin":5238002828}
 ```
 
-### Network timeouts
+### Netzwerk-Timeouts
 
-Every blocking network call now has an explicit deadline — a hung MX server or slow
-Telegram API can no longer freeze the process:
+Jeder blockierende Netzwerkaufruf hat jetzt eine explizite Deadline — ein hängender
+MX-Server oder eine träge Telegram-API können den Prozess nicht mehr einfrieren:
 
-| Call | Timeout |
+| Aufruf | Timeout |
 |------|---------|
-| DNS `LookupTXT` (SPF check) | 10 s |
-| DNS `LookupMX` (outbound delivery) | 10 s |
-| TCP dial to remote MTA | 15 s |
-| Full ingest pipeline per email | 30 s |
+| DNS `LookupTXT` (SPF-Prüfung) | 10 s |
+| DNS `LookupMX` (ausgehende Zustellung) | 10 s |
+| TCP-Dial zum entfernten MTA | 15 s |
+| Kompletter Ingest-Pipeline pro E-Mail | 30 s |
 
-### Panic recovery
+### Panic Recovery
 
-The Telegram update poller wraps each incoming message in a `defer recover()`. A
-malformed update that causes a panic is logged as `ERROR` and skipped — the poller
-continues processing subsequent messages.
+Der Telegram-Update-Poller umschließt jede eingehende Nachricht mit einem
+`defer recover()`. Ein fehlerhaftes Update, das einen Panic auslöst, wird als
+`ERROR` geloggt und übersprungen — der Poller verarbeitet die folgenden Nachrichten
+weiter.
 
-### golangci-lint in CI
+### golangci-lint in der CI
 
-`.golangci.yml` enables `errcheck`, `govet`, `staticcheck`, `ineffassign`, `misspell`,
-`gosec`, `bodyclose`, and `noctx`. The lint job runs on every push/PR before the Docker
-image is built.
+`.golangci.yml` aktiviert `errcheck`, `govet`, `staticcheck`, `ineffassign`, `misspell`,
+`gosec`, `bodyclose` und `noctx`. Der Lint-Job läuft bei jedem Push/PR, bevor das
+Docker-Image gebaut wird.
 
 ---
 
 ## Roadmap
 
-| # | Description | Status |
+| # | Beschreibung | Status |
 |---|-------------|--------|
-| 0 | Deliverability spike — PTR, SPF, DKIM on VPS | ✅ done |
-| 1 | SMTP inbound + Telegram notification | ✅ done |
-| 2 | Reply from Telegram → outbound email | ✅ done |
-| 3 | SQLite persistence | ✅ done |
-| 4 | Multi-user routing + `team@` alias fan-out | ✅ done |
-| 5 | Telegram Forum Topics (one topic per external contact) | ✅ done |
-| 6 | Admin panel via Telegram (`/adduser`, bind codes, empty-DB bootstrap) | ✅ done |
-| 7 | Hardening — slog JSON, context timeouts, panic recovery, golangci-lint CI | ✅ done |
+| 0 | Deliverability-Spike — PTR, SPF, DKIM auf dem VPS | ✅ erledigt |
+| 1 | SMTP-Inbound + Telegram-Benachrichtigung | ✅ erledigt |
+| 2 | Antwort aus Telegram → ausgehende E-Mail | ✅ erledigt |
+| 3 | SQLite-Persistenz | ✅ erledigt |
+| 4 | Multi-User-Routing + `team@`-Alias-Fan-out | ✅ erledigt |
+| 5 | Telegram Forum Topics (ein Topic pro externem Kontakt) | ✅ erledigt |
+| 6 | Admin-Panel via Telegram (`/adduser`, Bind-Codes, Bootstrap bei leerer DB) | ✅ erledigt |
+| 7 | Hardening — slog JSON, Context-Timeouts, Panic Recovery, golangci-lint-CI | ✅ erledigt |
 
 ---
 
-## Key dependencies
+## Kernabhängigkeiten
 
-| Package | Role |
+| Paket | Rolle |
 |---------|------|
-| `mhale/smtpd` | SMTP server |
-| `jhillyerd/enmime` | MIME parsing |
+| `mhale/smtpd` | SMTP-Server |
+| `jhillyerd/enmime` | MIME-Parsing |
 | `go-telegram-bot-api/v5` | Telegram Bot API |
-| `emersion/go-msgauth` | DKIM signing |
-| `modernc.org/sqlite` | Pure-Go SQLite (CGO_ENABLED=0) |
+| `emersion/go-msgauth` | DKIM-Signierung |
+| `modernc.org/sqlite` | reines Go-SQLite (CGO_ENABLED=0) |

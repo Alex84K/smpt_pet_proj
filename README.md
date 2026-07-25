@@ -79,8 +79,14 @@ keys/                   — DKIM PEM files (gitignored)
 | `DB_PATH` | | `mailshield.db` | SQLite database path |
 | `DKIM_KEY_PATH` | | `keys/dkim_private.pem` | DKIM RSA private key (PEM) |
 | `DKIM_SELECTOR` | | `mail` | DKIM selector |
+| `SMTP_RELAY_HOST` | | — | Outbound SMTP relay hostname (e.g. `smtp-relay.brevo.com`) |
+| `SMTP_RELAY_PORT` | | `587` | Relay port (STARTTLS) |
+| `SMTP_RELAY_USER` | | — | Relay SMTP login |
+| `SMTP_RELAY_PASS` | | — | Relay SMTP password |
 
 `TG_TOKEN` and `TG_ADMIN_ID` live in `.env`; everything else is in `docker-compose.yml`. To find your `TG_ADMIN_ID`, message the bot — it replies with your `chat_id`.
+
+**Outbound delivery is optional.** Without `SMTP_RELAY_HOST` the service starts and receives mail normally; replies from Telegram are silently skipped (`WARN: outbound relay not configured`). Add relay credentials to `.env` when you want to enable sending.
 
 ---
 

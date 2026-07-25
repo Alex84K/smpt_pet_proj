@@ -48,7 +48,13 @@ func main() {
 
 	// --- driven adapters ---
 	verd       := dnsadapter.New()
-	mailSender := mailer.New(hostname, dkimSelector, dkimKeyPath)
+	mailSender := mailer.New(
+		hostname, dkimSelector, dkimKeyPath,
+		envOr("SMTP_RELAY_HOST", ""),
+		envOr("SMTP_RELAY_PORT", "587"),
+		envOr("SMTP_RELAY_USER", ""),
+		envOr("SMTP_RELAY_PASS", ""),
+	)
 
 	// --- use-cases ---
 	ingest := app.NewIngestUseCase(verd, db, db, tgNotif, aliases...)

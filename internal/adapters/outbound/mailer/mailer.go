@@ -103,7 +103,7 @@ func deliver(ctx context.Context, addr, helo, from, to string, body []byte) erro
 	}
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err = c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+		if err = c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
 			return fmt.Errorf("STARTTLS: %w", err)
 		}
 	}

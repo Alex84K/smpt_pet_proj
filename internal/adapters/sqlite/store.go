@@ -64,8 +64,8 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("exec %q: %w", stmt[:min(40, len(stmt))], err)
 		}
 	}
-	// idempotent column additions for existing DBs
-	s.db.Exec(`ALTER TABLE conversations ADD COLUMN tg_topic_id INTEGER NOT NULL DEFAULT 0`)
+	// intentionally ignore error: fails with "duplicate column" on existing DBs, which is fine
+	_, _ = s.db.Exec(`ALTER TABLE conversations ADD COLUMN tg_topic_id INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -191,7 +191,9 @@ func (s *Store) ConsumeBindCode(code string) (string, bool) {
 	if err := s.db.QueryRow(`SELECT email FROM bind_codes WHERE code=?`, code).Scan(&email); err != nil {
 		return "", false
 	}
-	s.db.Exec(`DELETE FROM bind_codes WHERE code=?`, code)
+	if _, err := s.db.Exec(`DELETE FROM bind_codes WHERE code=?`, code); err != nil {
+		slog.Warn("delete bind code failed", "err", err)
+	}
 	return email, true
 }
 

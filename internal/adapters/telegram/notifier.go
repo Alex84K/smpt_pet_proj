@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -22,7 +22,7 @@ func NewNotifier(c *Client) *Notifier { return &Notifier{c} }
 
 func (n *Notifier) Notify(_ context.Context, notif core.Notification) error {
 	if notif.User.TGChatID == 0 {
-		log.Printf("[telegram/notifier] skip: TGChatID not set for %s", notif.User.Email)
+		slog.Warn("notify skip: TGChatID not set", "email", notif.User.Email)
 		return nil
 	}
 
@@ -33,7 +33,7 @@ func (n *Notifier) Notify(_ context.Context, notif core.Notification) error {
 		// First email from this contact — create a dedicated forum topic.
 		id, err := n.c.createTopic(chatID, topicName(notif))
 		if err != nil {
-			log.Printf("[telegram/notifier] create topic for %s: %v — sending to general chat", notif.ConvID, err)
+			slog.Warn("create topic failed — sending to general chat", "conv", notif.ConvID, "err", err)
 		} else {
 			_ = n.c.topicIdx.SetTopicID(notif.ConvID, id)
 			topicID = id
@@ -53,8 +53,8 @@ func (n *Notifier) Notify(_ context.Context, notif core.Notification) error {
 		return fmt.Errorf("telegram sendMessage to %d topic=%d: %w", chatID, topicID, err)
 	}
 
-	log.Printf("[telegram/notifier] sent to %s (chat=%d topic=%d) subject=%q verdict=%s",
-		notif.User.Email, chatID, topicID, notif.Email.Subject, notif.Verdict.Label)
+	slog.Info("notify sent", "email", notif.User.Email, "chat", chatID, "topic", topicID,
+		"subject", notif.Email.Subject, "verdict", notif.Verdict.Label)
 	return nil
 }
 

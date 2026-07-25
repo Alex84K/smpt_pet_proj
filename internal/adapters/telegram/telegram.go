@@ -3,7 +3,7 @@ package telegram
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -42,7 +42,7 @@ func NewClient(token string, topicIdx TopicIndex) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("telegram bot init: %w", err)
 	}
-	log.Printf("[telegram] authorised as @%s", bot.Self.UserName)
+	slog.Info("telegram authorised", "username", bot.Self.UserName)
 	return &Client{Bot: bot, topicIdx: topicIdx}, nil
 }
 

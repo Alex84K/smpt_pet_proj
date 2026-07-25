@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -18,6 +18,8 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	// --- config ---
 	tgToken      := mustEnv("TG_TOKEN")
 	bindAddr     := envOr("BIND_ADDR", "0.0.0.0:2525")
@@ -27,16 +29,17 @@ func main() {
 	dkimSelector := envOr("DKIM_SELECTOR", "mail")
 
 	// --- SQLite store (ConversationStore + UserRegistry + TopicIndex + AdminStore) ---
-	// Starts empty; the admin provisions mailboxes at runtime via Telegram commands.
 	db, err := sqlite.New(dbPath)
 	if err != nil {
-		log.Fatalf("[main] sqlite: %v", err)
+		slog.Error("sqlite init failed", "err", err)
+		os.Exit(1)
 	}
 
 	// --- telegram client ---
-	tgClient, err := telegram.NewClient(tgToken, db) // db implements MessageIndex
+	tgClient, err := telegram.NewClient(tgToken, db)
 	if err != nil {
-		log.Fatalf("[main] telegram: %v", err)
+		slog.Error("telegram init failed", "err", err)
+		os.Exit(1)
 	}
 	tgNotif := telegram.NewNotifier(tgClient)
 
@@ -62,26 +65,26 @@ func main() {
 
 	go func() {
 		if err := smtpSrv.ListenAndServe(); err != nil {
-			log.Printf("[main] smtp stopped: %v", err)
+			slog.Error("smtp stopped", "err", err)
 		}
 	}()
 	go tgPoller.Run(ctx)
 
-	log.Println("[MailShield] Etap 6 — admin panel via Telegram live")
-	log.Printf("[MailShield] bind=%s domain=%s db=%s admin=%d", bindAddr, hostname, dbPath, adminID)
+	slog.Info("MailShield started", "bind", bindAddr, "domain", hostname, "db", dbPath, "admin", adminID)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	log.Println("[MailShield] shutting down...")
+	slog.Info("shutting down")
 	cancel()
 }
 
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		log.Fatalf("[main] required env var %s is not set", key)
+		slog.Error("required env var not set", "key", key)
+		os.Exit(1)
 	}
 	return v
 }

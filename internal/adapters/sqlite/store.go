@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -26,7 +26,7 @@ func New(path string) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	log.Printf("[sqlite] ready at %s", path)
+	slog.Info("sqlite ready", "path", path)
 	return s, nil
 }
 

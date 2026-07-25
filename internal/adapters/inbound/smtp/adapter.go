@@ -3,9 +3,10 @@ package smtp
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/mhale/smtpd"
 	"mailshield/internal/core"
@@ -40,7 +41,7 @@ func New(addr, hostname string, ingestor core.MailIngestor, registry core.UserRe
 
 // ListenAndServe blocks until the server stops.
 func (a *Adapter) ListenAndServe() error {
-	log.Printf("[smtp] listening on %s", a.server.Addr)
+	slog.Info("smtp listening", "addr", a.server.Addr)
 	return a.server.ListenAndServe()
 }
 
@@ -52,7 +53,7 @@ func (a *Adapter) handleRcpt(_ net.Addr, _ string, to string) bool {
 	}
 	_, ok := a.registry.ByEmail(to)
 	if !ok {
-		log.Printf("[smtp] 550 unknown user: %s", to)
+		slog.Info("smtp reject unknown", "to", to)
 	}
 	return ok
 }
@@ -66,8 +67,10 @@ func (a *Adapter) handleMail(origin net.Addr, from string, to []string, data []b
 		To:       to,
 		Data:     data,
 	}
-	if err := a.ingestor.Ingest(context.Background(), raw); err != nil {
-		log.Printf("[smtp] ingest error from=%s: %v", from, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.ingestor.Ingest(ctx, raw); err != nil {
+		slog.Error("ingest failed", "from", from, "err", err)
 		return fmt.Errorf("temporary server error")
 	}
 	return nil

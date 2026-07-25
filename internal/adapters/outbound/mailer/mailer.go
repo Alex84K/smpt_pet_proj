@@ -8,7 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/smtp"
 	"os"
@@ -27,6 +27,8 @@ type Mailer struct {
 	signer   crypto.Signer // nil if key not loaded
 }
 
+var dnsResolver = &net.Resolver{}
+
 func New(domain, selector, keyPath string) *Mailer {
 	m := &Mailer{domain: domain, selector: selector}
 	if keyPath == "" {
@@ -34,11 +36,11 @@ func New(domain, selector, keyPath string) *Mailer {
 	}
 	key, err := loadPrivateKey(keyPath)
 	if err != nil {
-		log.Printf("[mailer] DKIM key not loaded (%s): %v — will send unsigned", keyPath, err)
+		slog.Warn("DKIM key not loaded — sending unsigned", "path", keyPath, "err", err)
 		return m
 	}
 	m.signer = key
-	log.Printf("[mailer] DKIM ready (domain=%s selector=%s)", domain, selector)
+	slog.Info("DKIM ready", "domain", domain, "selector", selector)
 	return m
 }
 
@@ -48,7 +50,7 @@ func (m *Mailer) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	if m.signer != nil {
 		signed, err := signDKIM(raw, m.signer, m.domain, m.selector)
 		if err != nil {
-			log.Printf("[mailer] DKIM sign error: %v — sending unsigned", err)
+			slog.Warn("DKIM sign error — sending unsigned", "err", err)
 		} else {
 			raw = signed
 		}
@@ -59,7 +61,10 @@ func (m *Mailer) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		return fmt.Errorf("invalid To address: %s", msg.To)
 	}
 
-	mxRecords, err := net.LookupMX(parts[1])
+	mxCtx, mxCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer mxCancel()
+
+	mxRecords, err := dnsResolver.LookupMX(mxCtx, parts[1])
 	if err != nil {
 		return fmt.Errorf("MX lookup for %s: %w", parts[1], err)
 	}
@@ -70,18 +75,26 @@ func (m *Mailer) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	mx := strings.TrimSuffix(mxRecords[0].Host, ".")
 	addr := mx + ":25"
 
-	log.Printf("[mailer] delivering from=%s to=%s via %s", msg.From, msg.To, addr)
-	if err := deliver(addr, m.domain, msg.From, msg.To, raw); err != nil {
+	slog.Info("delivering", "from", msg.From, "to", msg.To, "mx", addr)
+	if err := deliver(ctx, addr, m.domain, msg.From, msg.To, raw); err != nil {
 		return fmt.Errorf("deliver to %s: %w", addr, err)
 	}
-	log.Printf("[mailer] delivered to=%s subject=%q", msg.To, msg.Subject)
+	slog.Info("delivered", "to", msg.To, "subject", msg.Subject)
 	return nil
 }
 
-func deliver(addr, helo, from, to string, body []byte) error {
-	c, err := smtp.Dial(addr)
+func deliver(ctx context.Context, addr, helo, from, to string, body []byte) error {
+	host := strings.Split(addr, ":")[0]
+
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
+	}
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("smtp client: %w", err)
 	}
 	defer c.Close()
 
@@ -90,7 +103,6 @@ func deliver(addr, helo, from, to string, body []byte) error {
 	}
 
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		host := strings.Split(addr, ":")[0]
 		if err = c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 			return fmt.Errorf("STARTTLS: %w", err)
 		}

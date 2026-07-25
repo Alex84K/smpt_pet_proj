@@ -2,9 +2,10 @@ package dns
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"mailshield/internal/core"
 )
@@ -15,8 +16,8 @@ type Verdicter struct{}
 
 func New() *Verdicter { return &Verdicter{} }
 
-func (v *Verdicter) Analyze(_ context.Context, e core.ParsedEmail) core.Verdict {
-	spf := checkSPF(e.From, e.SenderIP)
+func (v *Verdicter) Analyze(ctx context.Context, e core.ParsedEmail) core.Verdict {
+	spf := checkSPF(ctx, e.From, e.SenderIP)
 
 	risk := 1
 	label := "clean"
@@ -25,7 +26,7 @@ func (v *Verdicter) Analyze(_ context.Context, e core.ParsedEmail) core.Verdict 
 		label = "suspicious"
 	}
 
-	log.Printf("[dns/verdicter] from=%s ip=%s spf=%s risk=%d", e.From, e.SenderIP, spf, risk)
+	slog.Info("spf check", "from", e.From, "ip", e.SenderIP, "spf", spf, "risk", risk)
 	return core.Verdict{
 		SPF:   spf,
 		DKIM:  "none", // real DKIM verify: roadmap Etap 1.2
@@ -34,17 +35,22 @@ func (v *Verdicter) Analyze(_ context.Context, e core.ParsedEmail) core.Verdict 
 	}
 }
 
+var resolver = &net.Resolver{}
+
 // checkSPF does a basic DNS TXT lookup to validate the sender's IP against SPF records.
-func checkSPF(fromEmail, senderIP string) string {
+func checkSPF(ctx context.Context, fromEmail, senderIP string) string {
 	parts := strings.Split(fromEmail, "@")
 	if len(parts) < 2 {
 		return "none"
 	}
 	domain := parts[1]
 
-	records, err := net.LookupTXT(domain)
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	records, err := resolver.LookupTXT(tctx, domain)
 	if err != nil {
-		log.Printf("[dns/verdicter] SPF lookup failed for %s: %v", domain, err)
+		slog.Warn("spf lookup failed", "domain", domain, "err", err)
 		return "none"
 	}
 

@@ -1,0 +1,28 @@
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - misspell
+    - gosec
+    - bodyclose
+    - noctx
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+  gosec:
+    excludes:
+      - G304  # file path from variable — intentional (DKIM key path from env)
+
+issues:
+  exclude-rules:
+    # test files don't need exhaustive error checks
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec

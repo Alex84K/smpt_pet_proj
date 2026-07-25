@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -48,13 +48,13 @@ func NewPoller(c *Client, registry core.UserRegistry, reply core.ReplyService, a
 }
 
 func (p *Poller) Run(ctx context.Context) {
-	log.Println("[telegram/poller] started (forum topics mode)")
+	slog.Info("poller started")
 	offset := 0
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("[telegram/poller] stopped")
+			slog.Info("poller stopped")
 			return
 		default:
 		}
@@ -65,7 +65,7 @@ func (p *Poller) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[telegram/poller] getUpdates error: %v — retrying in 5s", err)
+				slog.Warn("getUpdates error — retrying", "err", err, "delay", "5s")
 				time.Sleep(5 * time.Second)
 				continue
 			}
@@ -76,17 +76,25 @@ func (p *Poller) Run(ctx context.Context) {
 			if upd.Message == nil {
 				continue
 			}
-			switch {
-			case strings.HasPrefix(upd.Message.Text, "/bind"):
-				// binding runs inside the target supergroup — handle it before
-				// topic/direct routing so it works from any chat.
-				p.handleBind(upd.Message)
-			case upd.Message.MessageThreadID != 0:
-				p.handleTopicMessage(ctx, upd.Message)
-			default:
-				p.handleDirectMessage(upd.Message)
-			}
+			p.handleUpdate(ctx, upd.Message)
 		}
+	}
+}
+
+func (p *Poller) handleUpdate(ctx context.Context, msg *tgMessage) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("poller panic recovered", "panic", r, "chat", msg.Chat.ID)
+		}
+	}()
+	switch {
+	case strings.HasPrefix(msg.Text, "/bind"):
+		// binding runs inside the target supergroup — handle before topic/direct routing
+		p.handleBind(msg)
+	case msg.MessageThreadID != 0:
+		p.handleTopicMessage(ctx, msg)
+	default:
+		p.handleDirectMessage(msg)
 	}
 }
 
@@ -118,18 +126,18 @@ func (p *Poller) handleTopicMessage(ctx context.Context, msg *tgMessage) {
 
 	user, ok := p.registry.ByChatID(chatID)
 	if !ok {
-		log.Printf("[telegram/poller] no user for chat_id=%d", chatID)
+		slog.Warn("no user for chat_id", "chat", chatID)
 		return
 	}
 
-	log.Printf("[telegram/poller] reply from %s conv=%s body=%q", user.Email, convID, msg.Text)
+	slog.Info("reply", "email", user.Email, "conv", convID)
 
 	if err := p.reply.SubmitReply(ctx, core.ReplyCommand{
 		Actor:        user.ID,
 		Conversation: convID,
 		Body:         msg.Text,
 	}); err != nil {
-		log.Printf("[telegram/poller] submit reply error: %v", err)
+		slog.Error("submit reply failed", "err", err)
 	}
 }
 
@@ -159,7 +167,7 @@ func (p *Poller) handleBind(msg *tgMessage) {
 		"✅ <code>%s</code> привязан к этой группе (chat_id <code>%d</code>).\nПисьма для этого адреса теперь приходят сюда отдельными топиками.",
 		email, msg.Chat.ID,
 	))
-	log.Printf("[telegram/admin] bound %s → chat_id=%d", email, msg.Chat.ID)
+	slog.Info("bind code consumed", "email", email, "chat", msg.Chat.ID)
 }
 
 // handleDirectMessage handles non-topic DMs. Admin commands go to the admin
@@ -218,7 +226,7 @@ func (p *Poller) handleAdminCommand(msg *tgMessage) {
 			"✅ Ящик <code>%s</code> создан.\n\nКод привязки: <code>%s</code>\nОтправьте <code>/bind %s</code> в супергруппе этого пользователя, чтобы направлять туда его почту.",
 			user.Email, code, code,
 		))
-		log.Printf("[telegram/admin] created mailbox %s (id %d), bind code issued", user.Email, user.ID)
+		slog.Info("mailbox created", "email", user.Email, "user_id", user.ID)
 
 	case "/deluser":
 		if len(parts) != 2 {
@@ -230,7 +238,7 @@ func (p *Poller) handleAdminCommand(msg *tgMessage) {
 			return
 		}
 		p.sendMsg(chatID, "✅ Ящик <code>"+parts[1]+"</code> удалён.")
-		log.Printf("[telegram/admin] deleted mailbox %s", parts[1])
+		slog.Info("mailbox deleted", "email", parts[1])
 
 	case "/users":
 		users := p.admin.AllActive()
@@ -264,7 +272,7 @@ func (p *Poller) handleAdminCommand(msg *tgMessage) {
 			return
 		}
 		p.sendMsg(chatID, fmt.Sprintf("✅ <code>%s</code> → <code>%d</code>", parts[1], cid))
-		log.Printf("[telegram/admin] set chat_id for %s → %d", parts[1], cid)
+		slog.Info("chat_id set", "email", parts[1], "chat", cid)
 
 	default:
 		p.sendMsg(chatID, adminHelp)
@@ -278,6 +286,6 @@ func (p *Poller) sendMsg(chatID int64, text string) {
 		"parse_mode": "HTML",
 	}
 	if _, err := p.c.Bot.MakeRequest("sendMessage", params); err != nil {
-		log.Printf("[telegram/poller] sendMsg error: %v", err)
+		slog.Warn("sendMsg error", "chat", chatID, "err", err)
 	}
 }
